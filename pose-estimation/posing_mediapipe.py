@@ -1,14 +1,12 @@
-import time
-
 import cv2
-from cv2_enumerate_cameras import enumerate_cameras
 
 import mediapipe as mp
-from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.vision import drawing_utils
 from mediapipe.tasks.python.vision import drawing_styles
-from mediapipe.tasks.python.vision.hand_landmarker import landmark
+
+latest_pose_frame = None
+_landmarker = None
 
 # Модели mediapipe для отслеживания
 lite_model = 'models/mediapipe/pose_landmarker_lite.task'
@@ -24,11 +22,28 @@ PoseLandmarkerResult = vision.PoseLandmarkerResult
 VisionRunningMode = vision.RunningMode
 
 def print_result(result: PoseLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
-    drawing_utils.draw_landmarks(image=output_image.numpy_view(), landmark_list=result.pose_landmarks, connection_drawing_spec = drawing_styles.get_default_pose_landmarks_style())
-    cv2.imshow('Pose Estimation', output_image)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        exit()
-    print('pose landmarker result: {}'.format(result))
+    # latest_pose_frame импортируется из capture_control для дальнейшего вывода
+    global latest_pose_frame
+
+    result = result.pose_landmarks
+    frame_rgb = output_image.numpy_view().copy()
+
+    # Импорт стандартных стилей отрисовки
+    pose_landmark_style = drawing_styles.get_default_pose_landmarks_style()
+    pose_connection_style = drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=2)
+    
+    # Отрисовка каждой точки
+    for landmark in result:
+        drawing_utils.draw_landmarks(
+            image=frame_rgb,
+            landmark_list=landmark,
+            landmark_drawing_spec=pose_landmark_style,
+            connection_drawing_spec = pose_connection_style)
+
+    # Конвертация из RGB в BGR для OpenCV
+    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    latest_pose_frame = frame_bgr
+    # print('pose landmarker result: {}'.format(result))
 
 # Инициализация базовых параметров для модели
 options = PoseLandmarkerOptions(
@@ -37,43 +52,20 @@ options = PoseLandmarkerOptions(
     result_callback=print_result)
 
 
-def run_webcam() -> None:
-    
-    cap = get_camera()
-    
-    with PoseLandmarker.create_from_options(options) as landmarker:
-        try:
-            while True:
-                success, frame = cap.read()
-                if not success:
-                    continue
-
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(
-                    image_format=mp.ImageFormat.SRGB,
-                    data=frame_rgb,
-                )
-                frame_timestamp_ms = int(time.time() * 1000)
-                landmarker.detect_async(mp_image, frame_timestamp_ms)
-        finally:
-            cap.release()
+def mp_track_pose(frame: mp.Image, timestamp_ms: int) -> None:
+    global _landmarker
+    _landmarker.detect_async(frame, timestamp_ms)
+# Результат отслеживания переходит в через callback в print_result
 
 
-def get_camera() -> cv2.VideoCapture:
-    cameras = enumerate_cameras(cv2.CAP_DSHOW)
-    for camera in cameras:
-            print(camera)
-    while True:
-        index = int(input("Enter the index of the camera: "))
-        if index not in range(len(cameras)):
-            continue
-        cap = cv2.VideoCapture(cameras[index].index, cameras[index].backend)
-        if not cap.isOpened():
-            print(f"Unable to open webcam with index {index}.")
-            continue
-        else:
-            return cap
+def init_landmarker() -> None:
+    global _landmarker
+    if _landmarker is None:
+        _landmarker = PoseLandmarker.create_from_options(options)
 
-if __name__ == "__main__":
-    run_webcam()
 
+def close_landmarker() -> None:
+    global _landmarker
+    if _landmarker is not None:
+        _landmarker.close()
+        _landmarker = None
