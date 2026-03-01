@@ -4,6 +4,7 @@ import mediapipe as mp
 import time
 
 import posing_mediapipe as pose_mp
+import video_deform
 
 latest_camera_frame = None
 
@@ -26,11 +27,12 @@ def get_camera() -> cv2.VideoCapture:
 def run_webcam() -> None:
     
     cap = get_camera()
-    
+
     try:
         pose_mp.init_landmarker()
         cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
         while True:
             success, frame = cap.read()
             if not success:
@@ -39,6 +41,9 @@ def run_webcam() -> None:
             if pose_mp.latest_pose_frame is not None:
                 cv2.imshow('Pose Estimation', pose_mp.latest_pose_frame)
             cv2.imshow('Webcam', frame)
+            
+            if video_deform.torso_frame is not None:
+                cv2.imshow('Tors Deform', video_deform.torso_frame)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
