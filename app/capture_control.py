@@ -33,7 +33,8 @@ def start() -> None:
 
         cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
-        cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
+        #cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
+        
         while True:
             success, frame = cap.read()
             frames.set_webcam(frame.copy())
@@ -55,8 +56,6 @@ def start() -> None:
     finally:
         close_landmarker()
         cap.release()
-
-
 
 
 if __name__ == "__main__":

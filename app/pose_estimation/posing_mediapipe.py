@@ -99,3 +99,4 @@ def close_landmarker() -> None:
     if _landmarker is not None:
         _landmarker.close()
         _landmarker = None
+
