@@ -1,17 +1,27 @@
 import cv2
 import numpy as np
 
-torso_frame = None
+from frame_storage import frames, tiles
 
-def overlay_torso(frame, overlay_img, landmarks, frame_width, frame_height):
+#torso_frame = tiles.torso.copy()
+
+fr_width : int
+fr_height : int
+
+
+
+def overlay_torso(frame, overlay_img, landmarks):
+    global fr_width, fr_height
+    fw = fr_width
+    fh = fr_height
     # 1. Извлекаем координаты 4 точек из MediaPipe (x, y в пикселях)
     # Порядок: [Левое плечо, Правое плечо, Правое бедро, Левое бедро]
     landmark = landmarks[0]
     dst_pts = np.array([
-        [landmark[11].x * frame_width, landmark[11].y * frame_height],
-        [landmark[12].x * frame_width, landmark[12].y * frame_height],
-        [landmark[24].x * frame_width, landmark[24].y * frame_height],
-        [landmark[23].x * frame_width, landmark[23].y * frame_height]
+        [landmark[11].x * fw, landmark[11].y * fh],
+        [landmark[12].x * fw, landmark[12].y * fh],
+        [landmark[24].x * fw, landmark[24].y * fh],
+        [landmark[23].x * fw, landmark[23].y * fh]
     ], dtype="float32")
 
     # 2. Координаты углов исходного изображения (прямоугольник)
@@ -25,15 +35,21 @@ def overlay_torso(frame, overlay_img, landmarks, frame_width, frame_height):
 
     # 3. Вычисляем матрицу перспективы и трансформируем картинку
     M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-    warped_img = cv2.warpPerspective(overlay_img, M, (frame_width, frame_height))
+    warped_img = cv2.warpPerspective(overlay_img, M, (fw, fh))
 
-    # 4. Наложение с учетом прозрачности (Alpha-канал)
-    # Создаем маску из альфа-канала трансформированного изображения
+    # 4. Наложение overlay поверх frame с учётом прозрачности
     if overlay_img.shape[2] == 4:
         alpha_mask = warped_img[:, :, 3] / 255.0
-        for c in range(0, 3):
-            frame[:, :, c] = (alpha_mask * warped_img[:, :, c] +
-                              (1 - alpha_mask) * frame[:, :, c])
-    
-    torso_frame = frame
+    else:
+        alpha_mask = np.ones((fh, fw), dtype=np.float32)
 
+    for c in range(3):
+        frame[:, :, c] = (alpha_mask * warped_img[:, :, c] +
+                          (1 - alpha_mask) * frame[:, :, c]).astype(np.uint8)
+
+    frames.set_preview(frame)
+    return frame
+
+def init_frame():
+    global fr_width, fr_height
+    fr_width, fr_height = frames.get_webcam_res()

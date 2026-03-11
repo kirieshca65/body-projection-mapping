@@ -1,10 +1,22 @@
+import time
 import cv2
 from cv2_enumerate_cameras import enumerate_cameras
-import mediapipe as mp
-import time
+from screeninfo import get_monitors
 
 from frame_storage import frames
 from pose_estimation import mp_track_pose, init_landmarker, close_landmarker
+from frame_perfome import init_frame
+
+def get_screens():
+    screens = get_monitors()
+    for monitor in screens:
+        print(monitor)
+
+    index = int(input("Enter the index of the monitor: "))
+    monitor = screens[index]
+    frames.set_webcam_res(monitor.width, monitor.height)
+    init_frame()
+
 
 
 def get_camera() -> cv2.VideoCapture:
@@ -21,6 +33,11 @@ def get_camera() -> cv2.VideoCapture:
             print(f"Unable to open webcam with index {index}.")
             continue
         else:
+            frame = cap.read()
+            width = frame[1].shape[0]
+            height = frame[1].shape[0]
+            frames.set_webcam_res(width, height)
+            #print(frames.get_webcam_res())
             return cap
 
 
@@ -33,18 +50,24 @@ def start() -> None:
 
         cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
-        #cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
         
         while True:
             success, frame = cap.read()
+            #print(frame)
             frames.set_webcam(frame.copy())
+
             if not success:
                 continue
 
             pose_frame = frames.get_landmarks()
             if pose_frame is not None:
                 cv2.imshow('Pose Estimation', pose_frame)
-           
+            
+            preview_frame = frames.get_preview()
+            if preview_frame is not None:
+                cv2.imshow('Tors Deform', preview_frame)
+                
             cv2.imshow('Webcam', frame)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -59,4 +82,6 @@ def start() -> None:
 
 
 if __name__ == "__main__":
+    get_screens()
     start()
+    

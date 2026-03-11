@@ -13,6 +13,8 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python.vision import drawing_utils
 
 from frame_storage import frames
+from frame_perfome import overlay_torso
+from frame_storage import tiles
 
 latest_pose_frame = None
 _landmarker = None
@@ -49,7 +51,7 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
     result = result.pose_landmarks
     frame_ = output_image.numpy_view().copy()
     #print('pose landmarker result: {}'.format(result))
-    
+    overlay_torso(frames, tiles.get_torso(), result)
     landmark_print(result, frame_, timestamp_ms)
     
 

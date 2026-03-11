@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from typing import Optional
-
+from typing import Optional, List
 import numpy as np
+import cv2
+import os
 
 
 @dataclass
@@ -45,6 +46,48 @@ class FrameStorage:
     def get_mapping(self) -> Optional[np.ndarray]:
         return self.mapping_frame
 
+    """Разрешение проектора и вебкамеры"""
+    mapping_res : Optional[List[2 : int]] = None
+    webcam_res : Optional[List[2 : int]] = None
+
+    def set_mapping_res(self, width : int, height : int):
+        self.mapping_res = [width, height]
+
+    def get_mapping_res(self):
+        return self.mapping_res
+    
+    def set_webcam_res(self, width : int, height : int):
+        self.webcam_res = [width, height]
+
+    def get_webcam_res(self):
+        return self.webcam_res
+
+@dataclass
+class TilesStorage:
+    torso : Optional[np.ndarray] = None
+    l_arm : Optional[np.ndarray] = None
+    r_arm : Optional[np.ndarray] = None
+    l_leg : Optional[np.ndarray] = None
+    r_leg : Optional[np.ndarray] = None
+
+    texture : Optional[np.ndarray] = None
+
+    def chenge_texure(self, path : str):
+        self.texture = cv2.imread(path)
+    
+    def chenge_texure(self):
+        self.texture = cv2.imread("frame_perfome/tiles/test_body.png")
+    
+    def __init__(self) -> None:
+        absolute_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'frame_perfome','tiles', 'models')
+        # Декодируем массив в изображение OpenCV
+        img = cv2.imread(absolute_path)
+        self.texture = img
+       
+    def get_torso(self):
+        return self.torso
 
 """Единственный экземпляр — создаётся при первом импорте модуля"""
 frames: FrameStorage = FrameStorage()
+tiles: TilesStorage = TilesStorage()
+#tiles.chenge_texure()
