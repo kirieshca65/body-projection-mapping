@@ -10,10 +10,12 @@ fr_height : int
 
 
 
-def overlay_torso(frame, overlay_img, landmarks):
+def overlay_torso(landmarks):
     global fr_width, fr_height
     fw = fr_width
     fh = fr_height
+    overlay_img = tiles.get_torso()
+    frame = frames.get_webcam()
     # 1. Извлекаем координаты 4 точек из MediaPipe (x, y в пикселях)
     # Порядок: [Левое плечо, Правое плечо, Правое бедро, Левое бедро]
     landmark = landmarks[0]

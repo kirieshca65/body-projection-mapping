@@ -51,8 +51,9 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
     result = result.pose_landmarks
     frame_ = output_image.numpy_view().copy()
     #print('pose landmarker result: {}'.format(result))
-    overlay_torso(frames, tiles.get_torso(), result)
     landmark_print(result, frame_, timestamp_ms)
+    overlay_torso(result)
+    
     
 
 def landmark_print(landmarks, frame, timestamp: int):

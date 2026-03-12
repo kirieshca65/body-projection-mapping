@@ -72,20 +72,20 @@ class TilesStorage:
 
     texture : Optional[np.ndarray] = None
 
-    def chenge_texure(self, path : str):
+    def change_texure(self, path : str):
         self.texture = cv2.imread(path)
     
-    def chenge_texure(self):
+    def change_texure(self):
         self.texture = cv2.imread("frame_perfome/tiles/test_body.png")
     
     def __init__(self) -> None:
         absolute_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'frame_perfome','tiles', 'models')
         # Декодируем массив в изображение OpenCV
-        img = cv2.imread(absolute_path)
+        img = cv2.imread("app/frame_perfome/tiles/test_body.png")
         self.texture = img
        
     def get_torso(self):
-        return self.torso
+        return self.texture
 
 """Единственный экземпляр — создаётся при первом импорте модуля"""
 frames: FrameStorage = FrameStorage()
