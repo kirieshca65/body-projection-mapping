@@ -3,6 +3,8 @@ from typing import Optional, List
 import numpy as np
 import cv2
 import os
+import tempfile
+import shutil
 
 
 @dataclass
@@ -64,27 +66,66 @@ class FrameStorage:
 
 @dataclass
 class TilesStorage:
-    torso : Optional[np.ndarray] = None
-    l_arm : Optional[np.ndarray] = None
-    r_arm : Optional[np.ndarray] = None
-    l_leg : Optional[np.ndarray] = None
-    r_leg : Optional[np.ndarray] = None
+    torso: Optional[np.ndarray] = None
+    l_arm: Optional[np.ndarray] = None
+    r_arm: Optional[np.ndarray] = None
+    l_leg: Optional[np.ndarray] = None
+    r_leg: Optional[np.ndarray] = None
 
-    texture : Optional[np.ndarray] = None
+    texture: Optional[np.ndarray] = None
 
-    def change_texure(self, path : str):
-        self.texture = cv2.imread(path)
-    
-    def change_texure(self):
-        self.texture = cv2.imread("frame_perfome/tiles/test_body.png")
-    
-    def __init__(self) -> None:
-        absolute_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'frame_perfome','tiles', 'models')
-        # Декодируем массив в изображение OpenCV
-        img = cv2.imread("app/frame_perfome/tiles/test_body.png")
+    @staticmethod
+    def _imread_unicode(path: str) -> Optional[np.ndarray]:
+        """
+        Безопасное чтение изображений, в том числе по путям с кириллицей.
+        """
+        if not os.path.exists(path):
+            return None
+        # np.fromfile корректно работает с Unicode-путями на Windows
+        data = np.fromfile(path, dtype=np.uint8)
+        if data.size == 0:
+            return None
+        img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
+        return img
+
+    def change_texure(self, path: str):
+        img = self._imread_unicode(path)
+        if img is None:
+            raise FileNotFoundError(f"Не удалось открыть изображение по пути: {path}")
         self.texture = img
-       
+
+    def __init__(self) -> None:
+        """
+        Инициализация текстуры:
+        - исходный файл берётся из папки модуля (в том числе с кириллицей в пути),
+        - копируется во временную директорию,
+        - читается через _imread_unicode.
+        """
+        temp_dir = tempfile.gettempdir()
+        module_dir = os.path.dirname(os.path.abspath(__file__))
+        source = os.path.join(module_dir, "frame_perfome", "tiles", "test_body.png")
+
+        name = os.path.basename(source)
+        dest = os.path.join(temp_dir, f"body_tile_{name}")
+
+        # Перекопировать, если файла нет или он старее исходного
+        if not os.path.exists(dest) or os.path.getmtime(dest) < os.path.getmtime(source):
+            shutil.copy2(source, dest)
+
+        img = self._imread_unicode(dest)
+        if img is None:
+            # Последняя попытка — прочитать напрямую исходный файл
+            img = self._imread_unicode(source)
+        if img is None:
+            raise FileNotFoundError(
+                f"Не удалось открыть изображение ни по временном пути: {dest}, ни по исходному: {source}"
+            )
+
+        self.texture = img
+
     def get_torso(self):
+        if self.texture is None:
+            raise RuntimeError("Текстура торса не инициализирована в TilesStorage.")
         return self.texture
 
 """Единственный экземпляр — создаётся при первом импорте модуля"""
