@@ -1,11 +1,12 @@
 import time
+import threading
+import queue
 import cv2
 from cv2_enumerate_cameras import enumerate_cameras
 from screeninfo import get_monitors
 
 from frame_storage import frames
 from pose_estimation import mp_track_pose, init_landmarker, close_landmarker
-from frame_perfome import init_frame
 
 def get_screens():
     screens = get_monitors()
@@ -14,8 +15,7 @@ def get_screens():
 
     index = int(input("Enter the index of the monitor: "))
     monitor = screens[index]
-    frames.set_webcam_res(monitor.width, monitor.height)
-    init_frame()
+    frames.set_mapping_res(monitor.width, monitor.height)
 
 
 
@@ -44,6 +44,8 @@ def get_camera() -> cv2.VideoCapture:
 def start() -> None:
     
     cap = get_camera()
+    stop_event: threading.Event | None = None
+    t: threading.Thread | None = None
 
     try:
         init_landmarker()
@@ -51,14 +53,51 @@ def start() -> None:
         cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
+
+        # Кадры читаем в главном потоке, обработку (mp_track_pose + downstream) — в рабочем.
+        # maxsize=1: всегда обрабатываем "самый свежий" кадр, а не накапливаем задержку.
+        frame_queue: "queue.Queue[tuple[int, any]]" = queue.Queue(maxsize=1)
+        stop_event = threading.Event()
+
+        def worker() -> None:
+            while not stop_event.is_set():
+                try:
+                    ts_ms, frm = frame_queue.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                try:
+                    # Важно: в callback'е overlay_* берут кадр из frames.get_webcam().
+                    # Поэтому обновляем storage именно здесь, синхронно с отправкой в MediaPipe.
+                    frames.set_webcam(frm)
+                    mp_track_pose(frm, ts_ms)
+                finally:
+                    frame_queue.task_done()
+
+        t = threading.Thread(target=worker, name="pose_worker", daemon=True)
+        t.start()
         
         while True:
             success, frame = cap.read()
             #print(frame)
-            frames.set_webcam(frame.copy())
 
             if not success:
                 continue
+
+            frame_timestamp_ms = int(time.time() * 1000)
+            # Положить в очередь свежий кадр (если очередь занята — выбросить старый).
+            try:
+                frame_queue.put_nowait((frame_timestamp_ms, frame.copy()))
+            except queue.Full:
+                try:
+                    _ = frame_queue.get_nowait()
+                    frame_queue.task_done()
+                except queue.Empty:
+                    pass
+                try:
+                    frame_queue.put_nowait((frame_timestamp_ms, frame.copy()))
+                except queue.Full:
+                    # Если прямо сейчас снова занято — просто пропускаем этот кадр.
+                    pass
 
             pose_frame = frames.get_landmarks()
             if pose_frame is not None:
@@ -72,16 +111,20 @@ def start() -> None:
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
-
-            frame_timestamp_ms = int(time.time() * 1000)
-            mp_track_pose(frame, frame_timestamp_ms)
     
     finally:
+        if stop_event is not None:
+            stop_event.set()
+        if t is not None:
+            try:
+                t.join(timeout=1.0)
+            except Exception:
+                pass
         close_landmarker()
         cap.release()
 
 
 if __name__ == "__main__":
-    get_screens()
+    #get_screens()
     start()
     

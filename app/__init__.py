@@ -1,1 +1,1 @@
-from .frame_storage import frames
+from .frame_storage import frames, tiles
