@@ -1,10 +1,22 @@
+import time
+import threading
+import queue
 import cv2
 from cv2_enumerate_cameras import enumerate_cameras
-import mediapipe as mp
-import time
+from screeninfo import get_monitors
 
 from frame_storage import frames
 from pose_estimation import mp_track_pose, init_landmarker, close_landmarker
+
+def get_screens():
+    screens = get_monitors()
+    for monitor in screens:
+        print(monitor)
+
+    index = int(input("Enter the index of the monitor: "))
+    monitor = screens[index]
+    frames.set_mapping_res(monitor.width, monitor.height)
+
 
 
 def get_camera() -> cv2.VideoCapture:
@@ -21,42 +33,98 @@ def get_camera() -> cv2.VideoCapture:
             print(f"Unable to open webcam with index {index}.")
             continue
         else:
+            frame = cap.read()
+            width = frame[1].shape[0]
+            height = frame[1].shape[0]
+            frames.set_webcam_res(width, height)
+            #print(frames.get_webcam_res())
             return cap
 
 
 def start() -> None:
     
     cap = get_camera()
+    stop_event: threading.Event | None = None
+    t: threading.Thread | None = None
 
     try:
         init_landmarker()
 
         cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
-        #cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
+
+        # Кадры читаем в главном потоке, обработку (mp_track_pose + downstream) — в рабочем.
+        # maxsize=1: всегда обрабатываем "самый свежий" кадр, а не накапливаем задержку.
+        frame_queue: "queue.Queue[tuple[int, any]]" = queue.Queue(maxsize=1)
+        stop_event = threading.Event()
+
+        def worker() -> None:
+            while not stop_event.is_set():
+                try:
+                    ts_ms, frm = frame_queue.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+                try:
+                    # Важно: в callback'е overlay_* берут кадр из frames.get_webcam().
+                    # Поэтому обновляем storage именно здесь, синхронно с отправкой в MediaPipe.
+                    frames.set_webcam(frm)
+                    mp_track_pose(frm, ts_ms)
+                finally:
+                    frame_queue.task_done()
+
+        t = threading.Thread(target=worker, name="pose_worker", daemon=True)
+        t.start()
         
         while True:
             success, frame = cap.read()
-            frames.set_webcam(frame.copy())
+            #print(frame)
+
             if not success:
                 continue
+
+            frame_timestamp_ms = int(time.time() * 1000)
+            # Положить в очередь свежий кадр (если очередь занята — выбросить старый).
+            try:
+                frame_queue.put_nowait((frame_timestamp_ms, frame.copy()))
+            except queue.Full:
+                try:
+                    _ = frame_queue.get_nowait()
+                    frame_queue.task_done()
+                except queue.Empty:
+                    pass
+                try:
+                    frame_queue.put_nowait((frame_timestamp_ms, frame.copy()))
+                except queue.Full:
+                    # Если прямо сейчас снова занято — просто пропускаем этот кадр.
+                    pass
 
             pose_frame = frames.get_landmarks()
             if pose_frame is not None:
                 cv2.imshow('Pose Estimation', pose_frame)
-           
+            
+            preview_frame = frames.get_preview()
+            if preview_frame is not None:
+                cv2.imshow('Tors Deform', preview_frame)
+                
             cv2.imshow('Webcam', frame)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
-
-            frame_timestamp_ms = int(time.time() * 1000)
-            mp_track_pose(frame, frame_timestamp_ms)
     
     finally:
+        if stop_event is not None:
+            stop_event.set()
+        if t is not None:
+            try:
+                t.join(timeout=1.0)
+            except Exception:
+                pass
         close_landmarker()
         cap.release()
 
 
 if __name__ == "__main__":
+    #get_screens()
     start()
+    
