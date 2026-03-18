@@ -5,7 +5,7 @@ import cv2
 from cv2_enumerate_cameras import enumerate_cameras
 from screeninfo import get_monitors
 
-from frame_storage import frames
+from frame_storage import frames, tiles
 from pose_estimation import mp_track_pose, init_landmarker, close_landmarker
 
 def get_screens():
@@ -48,11 +48,14 @@ def start() -> None:
     t: threading.Thread | None = None
 
     try:
+        # Важно: выбор видео/диалог должен выполняться в main thread (Windows/tkinter).
+        # Если оставить ленивый выбор внутри draw_overlay(), он срабатывает в рабочем потоке.
+        tiles.ensure_video_selected()
         init_landmarker()
 
         cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
-        cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Preview', cv2.WINDOW_NORMAL)
 
         # Кадры читаем в главном потоке, обработку (mp_track_pose + downstream) — в рабочем.
         # maxsize=1: всегда обрабатываем "самый свежий" кадр, а не накапливаем задержку.
@@ -105,7 +108,7 @@ def start() -> None:
             
             preview_frame = frames.get_preview()
             if preview_frame is not None:
-                cv2.imshow('Tors Deform', preview_frame)
+                cv2.imshow('Preview', preview_frame)
                 
             cv2.imshow('Webcam', frame)
             

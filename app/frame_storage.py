@@ -1,10 +1,12 @@
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Dict, Tuple
 import numpy as np
 import cv2
 import os
 import tempfile
 import shutil
+
+from frame_perfome.video_stream import BufferedVideoReader
 
 
 @dataclass
@@ -73,6 +75,14 @@ class TilesStorage:
     r_leg: Optional[np.ndarray] = None
 
     texture: Optional[np.ndarray] = None
+    # alpha маски (uint8 0..255) по имени файла
+    masks_alpha: Optional[Dict[str, np.ndarray]] = None
+
+    # Видео (лениво)
+    _video_path: Optional[str]
+    _video_reader: Optional[BufferedVideoReader]
+    _video_select_attempted: bool
+    _overlay_cache: Dict[str, Tuple[Tuple[int, int], np.ndarray]]
 
     @staticmethod
     def _imread_unicode(path: str) -> Optional[np.ndarray]:
@@ -103,7 +113,8 @@ class TilesStorage:
         """
         temp_dir = tempfile.gettempdir()
         module_dir = os.path.dirname(os.path.abspath(__file__))
-        source = os.path.join(module_dir, "frame_perfome", "tiles", "test_body.png")
+        tiles_dir = os.path.join(module_dir, "frame_perfome", "tiles")
+        source = os.path.join(tiles_dir, "test_body.png")
 
         name = os.path.basename(source)
         dest = os.path.join(temp_dir, f"body_tile_{name}")
@@ -122,11 +133,152 @@ class TilesStorage:
             )
 
         self.texture = img
+        self.masks_alpha = {}
+        self._overlay_cache = {}
+        self._video_path = None
+        self._video_reader = None
+        self._video_select_attempted = False
+
+        self._load_default_masks(tiles_dir)
+
+    def _load_default_masks(self, tiles_dir: str) -> None:
+        """
+        Загружает 5 PNG-масок из app/frame_perfome/tiles/.
+        Если какой-то файл отсутствует/битый — просто пропускаем его,
+        чтобы не ломать весь пайплайн.
+        """
+        for name in (
+            "mask_torso.png",
+            "mask_forearm_r.png",
+            "mask_forearm_l.png",
+            "mask_thigh_r.png",
+            "mask_thigh_l.png",
+        ):
+            path = os.path.join(tiles_dir, name)
+            img = self._imread_unicode(path)
+            if img is None:
+                continue
+
+            alpha: Optional[np.ndarray] = None
+            if img.ndim == 3 and img.shape[2] == 4:
+                alpha = img[:, :, 3]
+            elif img.ndim == 3 and img.shape[2] >= 3:
+                alpha = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
+            elif img.ndim == 2:
+                alpha = img
+
+            if alpha is None:
+                continue
+
+            if alpha.dtype != np.uint8:
+                alpha = np.clip(alpha, 0, 255).astype(np.uint8)
+
+            self.masks_alpha[name] = alpha
 
     def get_torso(self):
         if self.texture is None:
             raise RuntimeError("Текстура торса не инициализирована в TilesStorage.")
         return self.texture
+
+    def get_mask_alpha(self, name: str) -> Optional[np.ndarray]:
+        return self.masks_alpha.get(name)
+
+    def set_video_path(self, path: str) -> None:
+        self._video_path = path
+        # переинициализируем ридер при смене пути
+        if self._video_reader is not None:
+            try:
+                self._video_reader.stop()
+            except Exception:
+                pass
+        self._video_reader = BufferedVideoReader(path)
+
+    def ensure_video_selected(self) -> None:
+        """
+        Запрашивает у пользователя видео-файл через диалог (один раз),
+        если путь не задан и ридер не инициализирован.
+        """
+        if self._video_reader is not None:
+            print("Вышел _video_reader")
+            return
+        if self._video_select_attempted:
+            print("Вышел _video_select_attempted")
+            return
+        self._video_select_attempted = True
+
+        # tkinter для получения пути до видео
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except Exception:
+            return
+        print("Открываем tinker")
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            path = filedialog.askopenfilename(
+                title="Выберите видео для масок",
+                filetypes=[
+                    ("Video files", "*.mp4;*.mov;*.mkv;*.avi;*.webm"),
+                    ("All files", "*.*"),
+                ],
+            )
+            print(path)
+            try:
+                root.destroy()
+            except Exception:
+                pass
+        except Exception:
+            return
+
+        if path:
+            try:
+                self.set_video_path(path)
+            except Exception:
+                # не валим пайплайн, если видео не открылось
+                return
+
+    def get_video_frame(self) -> Optional[np.ndarray]:
+        if self._video_reader is None:
+            self.ensure_video_selected()
+        if self._video_reader is None:
+            return None
+        return self._video_reader.get_latest_frame()
+
+    def build_overlay_bgra(self, mask_name: str) -> Optional[np.ndarray]:
+        """
+        Собирает BGRA: RGB берём из текущего кадра видео, alpha — из маски.
+        Маску ресайзим к размеру видео-кадра.
+
+        Кеширует последний результат (по mask_name и размеру).
+        """
+        alpha = self.get_mask_alpha(mask_name)
+        if alpha is None:
+            return None
+
+        video_bgr = self.get_video_frame()
+        if video_bgr is None:
+            return None
+
+        vh, vw = video_bgr.shape[:2]
+        if alpha.shape[:2] != (vh, vw):
+            # Маска — дискретная, поэтому интерполяция ближайшего соседа
+            alpha = cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
+
+        h, w = vh, vw
+        key = mask_name
+        cached = self._overlay_cache.get(key)
+        if cached is not None and cached[0] == (h, w):
+            # Обновляем только RGB, alpha остаётся той же (фиксированная маска)
+            overlay = cached[1]
+        else:
+            overlay = np.zeros((h, w, 4), dtype=np.uint8)
+            overlay[:, :, 3] = alpha
+            self._overlay_cache[key] = ((h, w), overlay)
+
+        overlay[:, :, :3] = video_bgr
+        return overlay
 
 """Единственный экземпляр — создаётся при первом импорте модуля"""
 frames: FrameStorage = FrameStorage()

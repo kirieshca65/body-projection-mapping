@@ -12,19 +12,40 @@ def draw_overlay(landmarks):
     # Рисуем оверлеи на копии, и обновляем preview один раз
     preview = frame.copy()
 
-   
-    overlay_limbs(landmarks, (14, 16), preview)
-    overlay_limbs(landmarks, (12, 14), preview)
-    overlay_torso(landmarks, preview)
+    # Конечности: берём текущий кадр видео + фиксированную маску (BGRA)
+    ov = tiles.build_overlay_bgra("mask_forearm_r.png")
+    if ov is not None:
+        overlay_limbs(landmarks, (11, 13), preview, overlay_img=ov)
+
+    ov = tiles.build_overlay_bgra("mask_forearm_l.png")
+    if ov is not None:
+        overlay_limbs(landmarks, (12, 14), preview, overlay_img=ov)
+
+    ov = tiles.build_overlay_bgra("mask_thigh_r.png")
+    if ov is not None:
+        overlay_limbs(landmarks, (23, 25), preview, overlay_img=ov)
+
+    ov = tiles.build_overlay_bgra("mask_thigh_l.png")
+    if ov is not None:
+        overlay_limbs(landmarks, (24, 26), preview, overlay_img=ov)
+
+    ov = tiles.build_overlay_bgra("mask_torso.png")
+    if ov is not None:
+        overlay_torso(landmarks, preview, overlay_img=ov)
     frames.set_preview(preview)
 
 
-def overlay_torso(landmarks, frame : np.ndarray):
+def overlay_torso(
+    landmarks,
+    frame: np.ndarray,
+    overlay_img: Optional[np.ndarray] = None,
+):
     """
     Накладывает текстуру торса на текущий кадр вебкамеры.
     Размеры берутся непосредственно из кадра, чтобы избежать рассинхронизации.
     """
-    overlay_img = tiles.get_torso()
+    if overlay_img is None:
+        overlay_img = tiles.get_torso()
 
     if frame is None or overlay_img is None:
         return
@@ -49,17 +70,6 @@ def overlay_torso(landmarks, frame : np.ndarray):
     center = dst_pts.mean(axis=0, keepdims=True)
     dst_pts = (dst_pts - center) * scale + center
 
-    # Координаты углов исходного изображения
-    h_img, w_img = overlay_img.shape[:2]
-    src_pts = np.array(
-        [
-            [0, 0],  # к левому плечу
-            [w_img, 0],  # к правому плечу
-            [w_img, h_img],  # к правому бедру
-            [0, h_img],  # к левому бедру
-        ],
-        dtype="float32",
-    )
 
     # быстрый варп+альфа только по ROI
     _warp_and_blend_roi(frame, overlay_img, dst_pts)
