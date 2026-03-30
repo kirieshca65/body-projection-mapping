@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple
 import numpy as np
 import cv2
@@ -51,8 +51,8 @@ class FrameStorage:
         return self.mapping_frame
 
     """Разрешение проектора и вебкамеры"""
-    mapping_res : Optional[List[2 : int]] = None
-    webcam_res : Optional[List[2 : int]] = None
+    mapping_res : Optional[Tuple[int, int]] = None
+    webcam_res : Optional[Tuple[int, int]] = None
 
     def set_mapping_res(self, width : int, height : int):
         self.mapping_res = [width, height]
@@ -78,11 +78,13 @@ class TilesStorage:
     # alpha маски (uint8 0..255) по имени файла
     masks_alpha: Optional[Dict[str, np.ndarray]] = None
 
-    # Видео (лениво)
-    _video_path: Optional[str]
-    _video_reader: Optional[BufferedVideoReader]
-    _video_select_attempted: bool
-    _overlay_cache: Dict[str, Tuple[Tuple[int, int], np.ndarray]]
+    # Видео (лениво); те же начальные значения, что в __init__
+    _video_path: Optional[str] = None
+    _video_reader: Optional[BufferedVideoReader] = None
+    _video_select_attempted: bool = False
+    _overlay_cache: Dict[str, Tuple[Tuple[int, int], np.ndarray]] = field(
+        default_factory=dict
+    )
 
     @staticmethod
     def _imread_unicode(path: str) -> Optional[np.ndarray]:
@@ -199,10 +201,8 @@ class TilesStorage:
         если путь не задан и ридер не инициализирован.
         """
         if self._video_reader is not None:
-            print("Вышел _video_reader")
             return
         if self._video_select_attempted:
-            print("Вышел _video_select_attempted")
             return
         self._video_select_attempted = True
 

@@ -35,7 +35,7 @@ def get_camera() -> cv2.VideoCapture:
         else:
             frame = cap.read()
             width = frame[1].shape[0]
-            height = frame[1].shape[0]
+            height = frame[1].shape[1]
             frames.set_webcam_res(width, height)
             #print(frames.get_webcam_res())
             return cap
@@ -49,7 +49,6 @@ def start() -> None:
 
     try:
         # Важно: выбор видео/диалог должен выполняться в main thread (Windows/tkinter).
-        # Если оставить ленивый выбор внутри draw_overlay(), он срабатывает в рабочем потоке.
         tiles.ensure_video_selected()
         init_landmarker()
 
@@ -89,7 +88,7 @@ def start() -> None:
             frame_timestamp_ms = int(time.time() * 1000)
             # Положить в очередь свежий кадр (если очередь занята — выбросить старый).
             try:
-                frame_queue.put_nowait((frame_timestamp_ms, frame.copy()))
+                frame_queue.put_nowait((frame_timestamp_ms, frame))
             except queue.Full:
                 try:
                     _ = frame_queue.get_nowait()
@@ -97,7 +96,7 @@ def start() -> None:
                 except queue.Empty:
                     pass
                 try:
-                    frame_queue.put_nowait((frame_timestamp_ms, frame.copy()))
+                    frame_queue.put_nowait((frame_timestamp_ms, frame))
                 except queue.Full:
                     # Если прямо сейчас снова занято — просто пропускаем этот кадр.
                     pass

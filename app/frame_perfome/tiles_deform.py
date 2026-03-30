@@ -9,30 +9,28 @@ def draw_overlay(landmarks):
     frame = frames.get_webcam()
     if frame is None:
         return
-    # Рисуем оверлеи на копии, и обновляем preview один раз
-    preview = frame.copy()
-
+    
     # Конечности: берём текущий кадр видео + фиксированную маску (BGRA)
     ov = tiles.build_overlay_bgra("mask_forearm_r.png")
     if ov is not None:
-        overlay_limbs(landmarks, (11, 13), preview, overlay_img=ov)
+        overlay_limbs(landmarks, (11, 13), frame, overlay_img=ov)
 
     ov = tiles.build_overlay_bgra("mask_forearm_l.png")
     if ov is not None:
-        overlay_limbs(landmarks, (12, 14), preview, overlay_img=ov)
+        overlay_limbs(landmarks, (12, 14), frame, overlay_img=ov)
 
     ov = tiles.build_overlay_bgra("mask_thigh_r.png")
     if ov is not None:
-        overlay_limbs(landmarks, (23, 25), preview, overlay_img=ov)
+        overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)
 
     ov = tiles.build_overlay_bgra("mask_thigh_l.png")
     if ov is not None:
-        overlay_limbs(landmarks, (24, 26), preview, overlay_img=ov)
+        overlay_limbs(landmarks, (24, 26), frame, overlay_img=ov)
 
     ov = tiles.build_overlay_bgra("mask_torso.png")
     if ov is not None:
-        overlay_torso(landmarks, preview, overlay_img=ov)
-    frames.set_preview(preview)
+        overlay_torso(landmarks, frame, overlay_img=ov)
+    frames.set_preview(frame)
 
 
 def overlay_torso(

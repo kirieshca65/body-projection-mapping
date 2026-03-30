@@ -49,6 +49,8 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
     global latest_pose_frame
     
     result = result.pose_landmarks
+    if result is None:
+        return
     frame_ = output_image.numpy_view().copy()
     #print('pose landmarker result: {}'.format(result))
     draw_overlay(result)
