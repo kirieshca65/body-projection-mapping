@@ -63,12 +63,10 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
     #print('pose landmarker result: {}'.format(result))
 
     # Передаём landmarks+кадр в отдельный поток для overlay, чтобы:
-    # - не блокировать callback,
-    # - не было рассинхрона (overlay строится на том же кадре, что и landmarks).
     q = _overlay_queue
     if q is not None:
         frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        payload = (timestamp_ms, copy.deepcopy(result), frame_bgr)
+        payload = (timestamp_ms, result, frame_bgr)
         try:
             q.put_nowait(payload)
         except queue.Full:
