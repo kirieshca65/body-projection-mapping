@@ -5,6 +5,7 @@ import cv2
 import os
 import tempfile
 import shutil
+import threading
 
 from frame_perfome.video_stream import BufferedVideoReader
 
@@ -19,52 +20,67 @@ class FrameStorage:
     tiles_frames: Optional[np.ndarray] = None      # Кадр с наложенным контентом
     preview_frames: Optional[np.ndarray] = None    # Кадр с наложенным контентом над вебкамерой
     mapping_frame: Optional[np.ndarray] = None     # Конечный кадр для вывода на проектор
+    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
 
     def set_webcam(self, frame: np.ndarray) -> None:
-        self.webcam_frame = frame.copy() if frame is not None else None
+        with self._lock:
+            self.webcam_frame = frame.copy() if frame is not None else None
 
     def set_landmarks(self, frame: np.ndarray) -> None:
-        self.landmarks_frame = frame.copy() if frame is not None else None
+        with self._lock:
+            self.landmarks_frame = frame.copy() if frame is not None else None
 
     def set_tiles(self, frame: np.ndarray) -> None:
-        self.tiles_frames = frame.copy() if frame is not None else None
+        with self._lock:
+            self.tiles_frames = frame.copy() if frame is not None else None
 
     def set_preview(self, frame: np.ndarray) -> None:
-        self.preview_frames = frame.copy() if frame is not None else None
+        with self._lock:
+            self.preview_frames = frame.copy() if frame is not None else None
 
     def set_mapping(self, frame: np.ndarray) -> None:
-        self.mapping_frame = frame.copy() if frame is not None else None
+        with self._lock:
+            self.mapping_frame = frame.copy() if frame is not None else None
 
     def get_webcam(self) -> Optional[np.ndarray]:
-        return self.webcam_frame
+        with self._lock:
+            return self.webcam_frame.copy() if self.webcam_frame is not None else None
 
     def get_landmarks(self) -> Optional[np.ndarray]:
-        return self.landmarks_frame
+        with self._lock:
+            return self.landmarks_frame.copy() if self.landmarks_frame is not None else None
 
     def get_tiles(self) -> Optional[np.ndarray]:
-        return self.tiles_frames
+        with self._lock:
+            return self.tiles_frames.copy() if self.tiles_frames is not None else None
 
     def get_preview(self) -> Optional[np.ndarray]:
-        return self.preview_frames
+        with self._lock:
+            return self.preview_frames.copy() if self.preview_frames is not None else None
 
     def get_mapping(self) -> Optional[np.ndarray]:
-        return self.mapping_frame
+        with self._lock:
+            return self.mapping_frame.copy() if self.mapping_frame is not None else None
 
     """Разрешение проектора и вебкамеры"""
     mapping_res : Optional[Tuple[int, int]] = None
     webcam_res : Optional[Tuple[int, int]] = None
 
     def set_mapping_res(self, width : int, height : int):
-        self.mapping_res = [width, height]
+        with self._lock:
+            self.mapping_res = (width, height)
 
     def get_mapping_res(self):
-        return self.mapping_res
+        with self._lock:
+            return self.mapping_res
     
     def set_webcam_res(self, width : int, height : int):
-        self.webcam_res = [width, height]
+        with self._lock:
+            self.webcam_res = (width, height)
 
     def get_webcam_res(self):
-        return self.webcam_res
+        with self._lock:
+            return self.webcam_res
 
 @dataclass
 class TilesStorage:
@@ -195,6 +211,15 @@ class TilesStorage:
                 pass
         self._video_reader = BufferedVideoReader(path)
 
+    def stop_videoreader(self) -> None:
+        reader = self._video_reader
+        if reader is None:
+            return
+        try:
+            reader.stop()
+        finally:
+            self._video_reader = None
+
     def ensure_video_selected(self) -> None:
         """
         Запрашивает у пользователя видео-файл через диалог (один раз),
@@ -246,7 +271,7 @@ class TilesStorage:
             return None
         return self._video_reader.get_latest_frame()
 
-    def build_overlay_bgra(self, mask_name: str) -> Optional[np.ndarray]:
+    def build_overlay_mask(self, mask_name: str) -> Optional[np.ndarray]:
         """
         Собирает BGRA: RGB берём из текущего кадра видео, alpha — из маски.
         Маску ресайзим к размеру видео-кадра.

@@ -5,29 +5,67 @@ import numpy as np
 from frame_storage import frames, tiles
 
 
-def draw_overlay(landmarks):
-    frame = frames.get_webcam()
+class _ExpSmoother2D:
+    """
+    Экспоненциальное сглаживание (EMA) для 2D-точек.
+
+    s_t = alpha * x_t + (1 - alpha) * s_{t-1}
+
+    Хранит состояние по ключу (например, индекс лендмарки).
+    """
+
+    def __init__(self, alpha: float = 0.55):
+        self.alpha = float(alpha)
+        self._state: dict[int, np.ndarray] = {}
+
+    def reset(self) -> None:
+        self._state.clear()
+
+    def update(self, key: int, value_xy: np.ndarray) -> np.ndarray:
+        v = np.asarray(value_xy, dtype=np.float32).reshape(2)
+        prev = self._state.get(int(key))
+        if prev is None:
+            out = v
+        else:
+            a = self.alpha
+            out = (a * v) + ((1.0 - a) * prev)
+        self._state[int(key)] = out
+        return out
+
+
+_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.2)
+
+
+def draw_overlay(landmarks, frame: Optional[np.ndarray] = None) -> None:
+    """
+    Рисует overlay на кадре, синхронном с landmarks.
+
+    Если `frame` не передан — берём кадр из `frames.get_webcam()` (fallback).
+    Для устранения рассинхрона предпочтительно всегда передавать кадр явно.
+    """
+    if frame is None:
+        frame = frames.get_webcam()
     if frame is None:
         return
     
     # Конечности: берём текущий кадр видео + фиксированную маску (BGRA)
-    ov = tiles.build_overlay_bgra("mask_forearm_r.png")
+    ov = tiles.build_overlay_mask("mask_forearm_r.png")
     if ov is not None:
         overlay_limbs(landmarks, (11, 13), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_bgra("mask_forearm_l.png")
+    ov = tiles.build_overlay_mask("mask_forearm_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (12, 14), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_bgra("mask_thigh_r.png")
+    ov = tiles.build_overlay_mask("mask_thigh_r.png")
     if ov is not None:
         overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_bgra("mask_thigh_l.png")
+    ov = tiles.build_overlay_mask("mask_thigh_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (24, 26), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_bgra("mask_torso.png")
+    ov = tiles.build_overlay_mask("mask_torso.png")
     if ov is not None:
         overlay_torso(landmarks, frame, overlay_img=ov)
     frames.set_preview(frame)
@@ -53,15 +91,11 @@ def overlay_torso(
     # Извлекаем координаты 4 точек из MediaPipe (x, y в пикселях)
     # Порядок: [Левое плечо, Правое плечо, Правое бедро, Левое бедро]
     landmark = landmarks[0]
-    dst_pts = np.array(
-        [
-            [landmark[11].x * fw, landmark[11].y * fh],
-            [landmark[12].x * fw, landmark[12].y * fh],
-            [landmark[24].x * fw, landmark[24].y * fh],
-            [landmark[23].x * fw, landmark[23].y * fh],
-        ],
-        dtype="float32",
-    )
+    torso_idx = (11, 12, 24, 23)
+    dst_raw = [
+        np.array([landmark[i].x * fw, landmark[i].y * fh], dtype=np.float32) for i in torso_idx
+    ]
+    dst_pts = np.array([_POINT_SMOOTHER.update(i, p) for i, p in zip(torso_idx, dst_raw)], dtype=np.float32)
 
     # расширяем четырёхугольник относительно центра, чтобы картинка выходила за пределы точек.
     scale = 1.2  # коэффициент "запаса" вокруг точек
@@ -98,8 +132,10 @@ def overlay_limbs(
 
     fh, fw = frame.shape[:2]
     landmark = landmarks[0]
-    p1 = np.array([landmark[limbs[0]].x * fw, landmark[limbs[0]].y * fh], dtype=np.float32)
-    p2 = np.array([landmark[limbs[1]].x * fw, landmark[limbs[1]].y * fh], dtype=np.float32)
+    p1_raw = np.array([landmark[limbs[0]].x * fw, landmark[limbs[0]].y * fh], dtype=np.float32)
+    p2_raw = np.array([landmark[limbs[1]].x * fw, landmark[limbs[1]].y * fh], dtype=np.float32)
+    p1 = _POINT_SMOOTHER.update(int(limbs[0]), p1_raw)
+    p2 = _POINT_SMOOTHER.update(int(limbs[1]), p2_raw)
 
     v = p2 - p1
     length = float(np.linalg.norm(v))
@@ -152,7 +188,7 @@ def _warp_and_blend_roi(
     x1 = int(np.ceil(np.max(dst_pts[:, 0])))
     y1 = int(np.ceil(np.max(dst_pts[:, 1])))
 
-    # небольшая "подушка" на случай округлений
+    # небольшой отступ на случай округлений
     pad = 2
     x0 -= pad
     y0 -= pad
@@ -212,3 +248,4 @@ def _warp_and_blend_roi(
     out = warped_rgb * alpha3 + roi_f * (1.0 - alpha3)
     np.clip(out, 0, 255, out=out)
     roi[:] = out.astype(np.uint8)
+    
