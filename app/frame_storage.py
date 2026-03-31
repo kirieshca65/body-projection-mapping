@@ -289,7 +289,7 @@ class TilesStorage:
         vh, vw = video_bgr.shape[:2]
         if alpha.shape[:2] != (vh, vw):
             # Маска — дискретная, поэтому интерполяция ближайшего соседа
-            alpha = cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
+            alpha = cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_AREA)
 
         h, w = vh, vw
         key = mask_name

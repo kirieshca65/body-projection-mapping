@@ -5,6 +5,15 @@ import numpy as np
 from frame_storage import frames, tiles
 
 
+size_adjust : float =  1.3
+"""
+- width_scale: ширина полосы как доля длины отрезка
+- extend_scale: насколько продлить отрезок за точки (доля длины)
+"""
+width_scale : float = 0.35
+extend_scale : float = 0.10
+
+
 class _ExpSmoother2D:
     """
     Экспоненциальное сглаживание (EMA) для 2D-точек.
@@ -33,7 +42,7 @@ class _ExpSmoother2D:
         return out
 
 
-_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.2)
+_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.6)
 
 
 def draw_overlay(landmarks, frame: Optional[np.ndarray] = None) -> None:
@@ -43,9 +52,7 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None) -> None:
     Если `frame` не передан — берём кадр из `frames.get_webcam()` (fallback).
     Для устранения рассинхрона предпочтительно всегда передавать кадр явно.
     """
-    if frame is None:
-        frame = frames.get_webcam()
-    if frame is None:
+    if frame is None or landmarks is None:
         return
     
     # Конечности: берём текущий кадр видео + фиксированную маску (BGRA)
@@ -83,7 +90,7 @@ def overlay_torso(
     if overlay_img is None:
         overlay_img = tiles.get_torso()
 
-    if frame is None or overlay_img is None:
+    if landmarks[0] is None or frame is None or overlay_img is None:
         return
 
     fh, fw = frame.shape[:2]
@@ -97,10 +104,10 @@ def overlay_torso(
     ]
     dst_pts = np.array([_POINT_SMOOTHER.update(i, p) for i, p in zip(torso_idx, dst_raw)], dtype=np.float32)
 
-    # расширяем четырёхугольник относительно центра, чтобы картинка выходила за пределы точек.
-    scale = 1.2  # коэффициент "запаса" вокруг точек
+    """Применение дополнительного увеличения"""
+    global size_adjust
     center = dst_pts.mean(axis=0, keepdims=True)
-    dst_pts = (dst_pts - center) * scale + center
+    dst_pts = (dst_pts - center) * size_adjust + center
 
 
     # быстрый варп+альфа только по ROI
@@ -113,21 +120,17 @@ def overlay_limbs(
     limbs: tuple[int, int],
     frame : np.ndarray,
     overlay_img: Optional[np.ndarray] = None,
-    *,
-    width_scale: float = 0.35,
-    extend_scale: float = 0.10,
 ):
     """
     Накладывает `overlay_img` по двум точкам (индексам лендмарок) как "полоску"
     вдоль отрезка между ними.
-
-    - width_scale: ширина полосы как доля длины отрезка
-    - extend_scale: насколько продлить отрезок за точки (доля длины)
     """
+
+    global width_scale, extend_scale
     if overlay_img is None:
         overlay_img = tiles.get_torso()
 
-    if frame is None or overlay_img is None:
+    if landmarks[0] is None or frame is None or overlay_img is None:
         return
 
     fh, fw = frame.shape[:2]
@@ -137,7 +140,8 @@ def overlay_limbs(
     p1 = _POINT_SMOOTHER.update(int(limbs[0]), p1_raw)
     p2 = _POINT_SMOOTHER.update(int(limbs[1]), p2_raw)
 
-    v = p2 - p1
+    v = p2 - p1 
+
     length = float(np.linalg.norm(v))
     if length < 1.0:
         return
