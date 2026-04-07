@@ -1,6 +1,7 @@
 import time
 import threading
 import queue
+import sys
 import cv2
 from cv2_enumerate_cameras import enumerate_cameras
 from screeninfo import get_monitors
@@ -19,24 +20,49 @@ def get_screens():
 
 
 
+def _preferred_capture_backends() -> list[int]:
+    # Подбираем бэкенды под ОС, чтобы работало на Windows/macOS.
+    if sys.platform.startswith("win"):
+        return [cv2.CAP_DSHOW, cv2.CAP_MSMF]
+    if sys.platform == "darwin":
+        return [cv2.CAP_AVFOUNDATION]
+    # На Linux обычно V4L2, оставим как запасной вариант.
+    return [cv2.CAP_V4L2]
+
+
 def get_camera() -> cv2.VideoCapture:
-    """Получение списка камер в системе"""
-    cameras = enumerate_cameras(cv2.CAP_DSHOW)
+    """Получение списка камер в системе (Windows/macOS/Linux)."""
+    cameras: list = []
+    for backend in _preferred_capture_backends():
+        try:
+            cams = enumerate_cameras(backend)
+            if cams:
+                cameras = cams
+                break
+        except Exception:
+            continue
+
+    if not cameras:
+        # Фоллбэк: показываем хотя бы индексы 0..5
+        cameras = [type("Cam", (), {"index": i, "backend": 0}) for i in range(6)]
+
     for camera in cameras:
-            print(camera)
+        print(camera)
+
     while True:
         index = int(input("Enter the index of the camera: "))
         if index not in range(len(cameras)):
             continue
-        cap = cv2.VideoCapture(cameras[index].index, cameras[index].backend)
+        backend = cameras[index].backend
+        cap = cv2.VideoCapture(cameras[index].index, backend)
         if not cap.isOpened():
             print(f"Unable to open webcam with index {index}.")
             continue
         else:
-            frame = cap.read()
-            width = frame[1].shape[0]
-            height = frame[1].shape[0]
-            frames.set_webcam_res(width, height)
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                height, width = frame.shape[:2]
+                frames.set_webcam_res(width, height)
             #print(frames.get_webcam_res())
             return cap
 
