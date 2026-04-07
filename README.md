@@ -1,6 +1,6 @@
 # Запуск
 1. Установка зависимостей: `pip install -r ./app/requirements.txt`
-2. Запуск `python ./app/capture_control.py`
+2. Запуск `python main.py`
 # Базовые данные получаемые от Mediapipe
 Внутри 2 массива: нормализованные координаы **Landmarks** и реальные координаты **WorldLandmarks**
 * Landmarks

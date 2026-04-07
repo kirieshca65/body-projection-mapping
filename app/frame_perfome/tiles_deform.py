@@ -2,9 +2,12 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from frame_storage import frames, tiles
+try:
+    from ..frame_storage import frames, tiles
+except ImportError:
+    from frame_storage import frames, tiles
 
-
+"""Коффициент добавочного масштабирования торса"""
 size_adjust : float =  1.25
 """
 - width_scale: ширина полосы как доля длины отрезка
@@ -45,7 +48,9 @@ class _ExpSmoother2D:
 _POINT_SMOOTHER = _ExpSmoother2D(alpha=0.6)
 
 
-def draw_overlay(landmarks, frame: Optional[np.ndarray] = None) -> None:
+
+
+def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_masks: Optional[np.ndarray] = None) -> None:
     """
     Рисует overlay на кадре, синхронном с landmarks.
 
@@ -75,7 +80,13 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None) -> None:
     ov = tiles.build_overlay_mask("mask_torso.png")
     if ov is not None:
         overlay_torso(landmarks, frame, overlay_img=ov)
+    
+    """Применение маски сегментации"""
+    """if segmentation_masks is not None:
+        frame = apply_segmentation_alpha(frame, segmentation_masks, threshold=1)"""
+
     frames.set_preview(frame)
+
 
 
 def overlay_torso(
@@ -253,3 +264,116 @@ def _warp_and_blend_roi(
     np.clip(out, 0, 255, out=out)
     roi[:] = out.astype(np.uint8)
     
+def crop_frame_by_segmentation_mask(
+    frame: np.ndarray,
+    segmentation_mask: np.ndarray,
+    *,
+    threshold: int = 1,
+    padding_px: int = 8,
+    min_bbox_side: int = 8,
+) -> np.ndarray:
+    """
+    Обрезает кадр по segmentation mask (bbox по пикселям > threshold).
+
+    Ожидаемая маска: HxW, uint8 (0..255) или float (0..1). Если размеры не совпадают
+    с кадром — маска ресайзится к размеру кадра.
+
+    Возвращает новый (cropped) кадр. Если маска пустая/некорректная — возвращает исходный.
+    """
+    if frame is None or segmentation_mask is None:
+        return frame
+
+    fh, fw = frame.shape[:2]
+
+    m = segmentation_mask
+    if m.ndim == 3:
+        # На случай, если маску по ошибке превратили в BGR/float RGB.
+        m = m[:, :, 0]
+
+    if m.shape[0] != fh or m.shape[1] != fw:
+        m = cv2.resize(m, (fw, fh), interpolation=cv2.INTER_NEAREST)
+
+    if m.dtype != np.uint8:
+        # float 0..1 -> uint8 0..255; или любые другие типы зажмём в 0..255
+        m = np.clip(m, 0.0, 1.0) if np.issubdtype(m.dtype, np.floating) else np.clip(m, 0, 255)
+        m = (m * 255.0).astype(np.uint8) if np.issubdtype(segmentation_mask.dtype, np.floating) else m.astype(np.uint8)
+
+    ys, xs = np.where(m > int(threshold))
+    if ys.size == 0 or xs.size == 0:
+        return frame
+
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+
+    # padding + clip
+    pad = int(max(0, padding_px))
+    y0 = max(0, y0 - pad)
+    x0 = max(0, x0 - pad)
+    y1 = min(fh, y1 + pad)
+    x1 = min(fw, x1 + pad)
+
+    if (y1 - y0) < int(min_bbox_side) or (x1 - x0) < int(min_bbox_side):
+        return frame
+
+    return frame[y0:y1, x0:x1].copy()
+
+
+def apply_segmentation_alpha(
+    frame: np.ndarray,
+    segmentation_mask: np.ndarray,
+    *,
+    threshold: int = 1,
+) -> np.ndarray:
+    """
+    Использует segmentation_mask как маску "вырезания".
+
+    Результат:
+    - Возвращает BGRA-кадр (H, W, 4)
+    - В белой области маски alpha=255
+    - Вне маски alpha=0 и BGR занулён
+
+    Если маска пустая/некорректная — возвращает исходный кадр (как есть).
+    """
+    if frame is None or segmentation_mask is None:
+        return frame
+
+    fh, fw = frame.shape[:2]
+
+    m = segmentation_mask
+    if m.ndim == 3:
+        m = m[:, :, 0]
+    if m.shape[0] != fh or m.shape[1] != fw:
+        m = cv2.resize(m, (fw, fh), interpolation=cv2.INTER_NEAREST)
+
+    if m.dtype != np.uint8:
+        if np.issubdtype(m.dtype, np.floating):
+            m = np.clip(m, 0.0, 1.0)
+            m = (m * 255.0).astype(np.uint8)
+        else:
+            m = np.clip(m, 0, 255).astype(np.uint8)
+
+    keep = (m > int(threshold))
+    if not np.any(keep):
+        return frame
+
+    if frame.ndim == 3 and frame.shape[2] == 4:
+        out = frame.copy()
+    else:
+        # приводим к BGRA
+        if frame.ndim == 2:
+            bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        else:
+            bgr = frame[:, :, :3]
+        out = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
+
+    alpha = np.zeros((fh, fw), dtype=np.uint8)
+    alpha[keep] = 255
+    out[:, :, 3] = alpha
+
+    # Зануляем цвет вне маски (чтобы при композитинге не было "ореолов")
+    inv = ~keep
+    out[inv, 0] = 0
+    out[inv, 1] = 0
+    out[inv, 2] = 0
+
+    return out

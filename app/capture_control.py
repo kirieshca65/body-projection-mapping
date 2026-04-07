@@ -6,14 +6,24 @@ import cv2
 from cv2_enumerate_cameras import enumerate_cameras
 from screeninfo import get_monitors
 
-from frame_storage import frames, tiles
-from pose_estimation import (
-    mp_track_pose,
-    init_landmarker,
-    close_landmarker,
-    start_overlay_worker,
-    stop_overlay_worker,
-)
+try:
+    from .frame_storage import frames, tiles
+    from .pose_estimation import (
+        mp_track_pose,
+        init_landmarker,
+        close_landmarker,
+        start_overlay_worker,
+        stop_overlay_worker,
+    )
+except ImportError:
+    from frame_storage import frames, tiles
+    from pose_estimation import (
+        mp_track_pose,
+        init_landmarker,
+        close_landmarker,
+        start_overlay_worker,
+        stop_overlay_worker,
+    )
 
 def get_screens():
     screens = get_monitors()

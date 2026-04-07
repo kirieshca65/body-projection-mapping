@@ -1,13 +1,65 @@
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, ContextManager
 import numpy as np
 import cv2
 import os
 import tempfile
 import shutil
 import threading
+from contextlib import contextmanager
 
-from frame_perfome.video_stream import BufferedVideoReader
+try:
+    from .frame_perfome.video_stream import BufferedVideoReader
+except ImportError:
+    from frame_perfome.video_stream import BufferedVideoReader
+
+
+class RWLock:
+    """
+    Простой read/write lock для потоков.
+
+    - Несколько читателей могут заходить параллельно.
+    - Писатель получает эксклюзивный доступ.
+    - Приоритет писателя: если есть ожидающие писатели, новые читатели ждут,
+      чтобы запись не голодала при постоянном потоке чтений.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition(threading.Lock())
+        self._readers = 0
+        self._writer = False
+        self._waiting_writers = 0
+
+    @contextmanager
+    def read_lock(self) -> ContextManager[None]:
+        with self._cond:
+            while self._writer or self._waiting_writers > 0:
+                self._cond.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._cond.notify_all()
+
+    @contextmanager
+    def write_lock(self) -> ContextManager[None]:
+        with self._cond:
+            self._waiting_writers += 1
+            try:
+                while self._writer or self._readers > 0:
+                    self._cond.wait()
+                self._writer = True
+            finally:
+                self._waiting_writers -= 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._writer = False
+                self._cond.notify_all()
 
 
 @dataclass
@@ -20,46 +72,46 @@ class FrameStorage:
     tiles_frames: Optional[np.ndarray] = None      # Кадр с наложенным контентом
     preview_frames: Optional[np.ndarray] = None    # Кадр с наложенным контентом над вебкамерой
     mapping_frame: Optional[np.ndarray] = None     # Конечный кадр для вывода на проектор
-    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _rwlock: RWLock = field(default_factory=RWLock, init=False, repr=False)
 
     def set_webcam(self, frame: np.ndarray) -> None:
-        with self._lock:
+        with self._rwlock.write_lock():
             self.webcam_frame = frame.copy() if frame is not None else None
 
     def set_landmarks(self, frame: np.ndarray) -> None:
-        with self._lock:
+        with self._rwlock.write_lock():
             self.landmarks_frame = frame.copy() if frame is not None else None
 
     def set_tiles(self, frame: np.ndarray) -> None:
-        with self._lock:
+        with self._rwlock.write_lock():
             self.tiles_frames = frame.copy() if frame is not None else None
 
     def set_preview(self, frame: np.ndarray) -> None:
-        with self._lock:
+        with self._rwlock.write_lock():
             self.preview_frames = frame.copy() if frame is not None else None
 
     def set_mapping(self, frame: np.ndarray) -> None:
-        with self._lock:
+        with self._rwlock.write_lock():
             self.mapping_frame = frame.copy() if frame is not None else None
 
     def get_webcam(self) -> Optional[np.ndarray]:
-        with self._lock:
+        with self._rwlock.read_lock():
             return self.webcam_frame.copy() if self.webcam_frame is not None else None
 
     def get_landmarks(self) -> Optional[np.ndarray]:
-        with self._lock:
+        with self._rwlock.read_lock():
             return self.landmarks_frame.copy() if self.landmarks_frame is not None else None
 
     def get_tiles(self) -> Optional[np.ndarray]:
-        with self._lock:
+        with self._rwlock.read_lock():
             return self.tiles_frames.copy() if self.tiles_frames is not None else None
 
     def get_preview(self) -> Optional[np.ndarray]:
-        with self._lock:
+        with self._rwlock.read_lock():
             return self.preview_frames.copy() if self.preview_frames is not None else None
 
     def get_mapping(self) -> Optional[np.ndarray]:
-        with self._lock:
+        with self._rwlock.read_lock():
             return self.mapping_frame.copy() if self.mapping_frame is not None else None
 
     """Разрешение проектора и вебкамеры"""
@@ -67,19 +119,19 @@ class FrameStorage:
     webcam_res : Optional[Tuple[int, int]] = None
 
     def set_mapping_res(self, width : int, height : int):
-        with self._lock:
+        with self._rwlock.write_lock():
             self.mapping_res = (width, height)
 
     def get_mapping_res(self):
-        with self._lock:
+        with self._rwlock.read_lock():
             return self.mapping_res
     
     def set_webcam_res(self, width : int, height : int):
-        with self._lock:
+        with self._rwlock.write_lock():
             self.webcam_res = (width, height)
 
     def get_webcam_res(self):
-        with self._lock:
+        with self._rwlock.read_lock():
             return self.webcam_res
 
 @dataclass
