@@ -5,13 +5,13 @@ import numpy as np
 from frame_storage import frames, tiles
 
 
-size_adjust : float =  1.3
+size_adjust : float =  1.25
 """
 - width_scale: ширина полосы как доля длины отрезка
 - extend_scale: насколько продлить отрезок за точки (доля длины)
 """
-width_scale : float = 0.35
-extend_scale : float = 0.10
+width_scale : float = 0.25
+extend_scale : float = 0.08
 
 
 class _ExpSmoother2D:

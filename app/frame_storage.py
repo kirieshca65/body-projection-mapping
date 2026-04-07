@@ -98,7 +98,13 @@ class TilesStorage:
     _video_path: Optional[str] = None
     _video_reader: Optional[BufferedVideoReader] = None
     _video_select_attempted: bool = False
-    _overlay_cache: Dict[str, Tuple[Tuple[int, int], np.ndarray]] = field(
+
+    # Маски, один раз масштабированные под текущее разрешение видео.
+    _masks_alpha_scaled: Dict[str, np.ndarray] = field(default_factory=dict)
+    _masks_alpha_scaled_res: Optional[Tuple[int, int]] = None  # (vh, vw)
+
+    # mask_name -> ((vh, vw), (y0, y1, x0, x1), overlay_BGRA)
+    _overlay_cache: Dict[str, Tuple[Tuple[int, int], Tuple[int, int, int, int], np.ndarray]] = field(
         default_factory=dict
     )
 
@@ -151,11 +157,13 @@ class TilesStorage:
             )
 
         self.texture = img
-        self.masks_alpha = {}
-        self._overlay_cache = {}
-        self._video_path = None
-        self._video_reader = None
-        self._video_select_attempted = False
+        self.masks_alpha :Dict = {}
+        self._overlay_cache :Dict = {}
+        self._video_path :str = None
+        self._video_reader :BufferedVideoReader = None
+        self._video_select_attempted :bool = False
+        self._masks_alpha_scaled = {}
+        self._masks_alpha_scaled_res = None
 
         self._load_default_masks(tiles_dir)
 
@@ -210,6 +218,53 @@ class TilesStorage:
             except Exception:
                 pass
         self._video_reader = BufferedVideoReader(path)
+        # При смене видео сбрасываем подготовленные маски и кеш оверлеев.
+        self._masks_alpha_scaled = {}
+        self._masks_alpha_scaled_res = None
+        self._overlay_cache = {}
+
+    def _scale_masks_to_video_res(self, vh: int, vw: int) -> None:
+        """
+        Масштабирует все alpha-маски в разрешение видео один раз.
+        """
+        if vh <= 0 or vw <= 0:
+            return
+        if self._masks_alpha_scaled_res == (vh, vw) and self._masks_alpha_scaled:
+            return
+
+        scaled: Dict[str, np.ndarray] = {}
+        for name, alpha in (self.masks_alpha or {}).items():
+            if alpha is None:
+                continue
+            if alpha.shape[:2] == (vh, vw):
+                scaled[name] = alpha
+            else:
+                scaled[name] = cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
+
+        self._masks_alpha_scaled = scaled
+        self._masks_alpha_scaled_res = (vh, vw)
+        # bbox/overlay зависит от размеров => сбрасываем
+        self._overlay_cache = {}
+
+    def prepare_masks_for_video(self) -> None:
+        """
+        Вызывается один раз после успешного открытия видео.
+        Берёт разрешение видео (через cv2.VideoCapture по пути) и масштабирует маски.
+        """
+        path = self._video_path
+        if not path:
+            return
+        try:
+            cap = cv2.VideoCapture(path)
+            if not cap.isOpened():
+                cap.release()
+                return
+            vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            cap.release()
+        except Exception:
+            return
+        self._scale_masks_to_video_res(vh, vw)
 
     def stop_videoreader(self) -> None:
         reader = self._video_reader
@@ -260,6 +315,8 @@ class TilesStorage:
         if path:
             try:
                 self.set_video_path(path)
+                # Подготовка (масштабирование) масок под видео делается один раз.
+                self.prepare_masks_for_video()
             except Exception:
                 # не валим пайплайн, если видео не открылось
                 return
@@ -274,9 +331,13 @@ class TilesStorage:
     def build_overlay_mask(self, mask_name: str) -> Optional[np.ndarray]:
         """
         Собирает BGRA: RGB берём из текущего кадра видео, alpha — из маски.
-        Маску ресайзим к размеру видео-кадра.
+        Алгоритм:
+        - масштабируем маску до размеров видео-кадра, чтобы разрешения совпали,
+        - по маске берём область интереса (bbox ненулевой альфы),
+        - обрезаем видео и маску до bbox (без пустых полей),
+        - собираем BGRA на обрезанной области.
 
-        Кеширует последний результат (по mask_name и размеру).
+        Кеширует последний результат (по mask_name, размеру видео и bbox).
         """
         alpha = self.get_mask_alpha(mask_name)
         if alpha is None:
@@ -287,22 +348,39 @@ class TilesStorage:
             return None
 
         vh, vw = video_bgr.shape[:2]
-        if alpha.shape[:2] != (vh, vw):
-            # Маска — дискретная, поэтому интерполяция ближайшего соседа
-            alpha = cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_AREA)
 
-        h, w = vh, vw
+        # Маска должна быть в разрешении видео: предпочитаем заранее подготовленную.
+        alpha_scaled = None
+        if self._masks_alpha_scaled_res == (vh, vw):
+            alpha_scaled = self._masks_alpha_scaled.get(mask_name)
+        if alpha_scaled is None:
+            # Фоллбэк: если prepare_masks_for_video() не сработал — масштабируем на лету.
+            alpha_scaled = (
+                alpha
+                if alpha.shape[:2] == (vh, vw)
+                else cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
+            )
+
+        # Находим bbox ненулевой альфы.
+        ys, xs = np.where(alpha_scaled > 0)
+        if ys.size == 0 or xs.size == 0:
+            return None
+        y0, y1 = int(ys.min()), int(ys.max()) + 1
+        x0, x1 = int(xs.min()), int(xs.max()) + 1
+
         key = mask_name
         cached = self._overlay_cache.get(key)
-        if cached is not None and cached[0] == (h, w):
-            # Обновляем только RGB, alpha остаётся той же (фиксированная маска)
-            overlay = cached[1]
+        if cached is not None and cached[0] == (vh, vw) and cached[1] == (y0, y1, x0, x1):
+            overlay = cached[2]
         else:
+            alpha_crop = alpha_scaled[y0:y1, x0:x1]
+            h, w = alpha_crop.shape[:2]
             overlay = np.zeros((h, w, 4), dtype=np.uint8)
-            overlay[:, :, 3] = alpha
-            self._overlay_cache[key] = ((h, w), overlay)
+            overlay[:, :, 3] = alpha_crop
+            self._overlay_cache[key] = ((vh, vw), (y0, y1, x0, x1), overlay)
 
-        overlay[:, :, :3] = video_bgr
+        video_crop = video_bgr[y0:y1, x0:x1]
+        overlay[:, :, :3] = video_crop
         return overlay
 
 """Единственный экземпляр — создаётся при первом импорте модуля"""
