@@ -4,6 +4,9 @@ import tempfile
 
 import cv2
 import numpy as np
+import threading
+import queue
+import copy
 
 from . import custom_pose_style
 
@@ -18,12 +21,9 @@ from frame_storage import tiles
 
 latest_pose_frame = None
 _landmarker = None
-
-"""Модели mediapipe для отслеживания"""
-_models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
-_full_src = os.path.join(_models_dir, 'pose_landmarker_full.task')
-_lite_src = os.path.join(_models_dir, 'pose_landmarker_lite.task')
-
+_overlay_thread: threading.Thread | None = None
+_overlay_stop: threading.Event | None = None
+_overlay_queue: "queue.Queue[tuple[int, object, np.ndarray]]" = None
 
 def _model_path_for_mediapipe(source: str) -> str:
     """Возвращает путь к модели, доступный для MediaPipe"""
@@ -35,7 +35,15 @@ def _model_path_for_mediapipe(source: str) -> str:
     return dest
 
 
+"""Модели mediapipe для отслеживания"""
+_models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
+_full_src = os.path.join(_models_dir, 'pose_landmarker_full.task')
+_lite_src = os.path.join(_models_dir, 'pose_landmarker_lite.task')
+
+""""""
 model_path = _model_path_for_mediapipe(_full_src)
+
+
 
 """Импорт базовых параметров для модели PoseLandmarker"""
 BaseOptions = mp.tasks.BaseOptions
@@ -49,11 +57,30 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
     global latest_pose_frame
     
     result = result.pose_landmarks
-    frame_ = output_image.numpy_view().copy()
+    if result is None:
+        return
+    frame_rgb = output_image.numpy_view().copy()
     #print('pose landmarker result: {}'.format(result))
-    draw_overlay(result)
 
-    landmark_print(result, frame_, timestamp_ms)
+    # Передаём landmarks+кадр в отдельный поток для overlay, чтобы:
+    q = _overlay_queue
+    if q is not None:
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        payload = (timestamp_ms, result, frame_bgr)
+        try:
+            q.put_nowait(payload)
+        except queue.Full:
+            try:
+                _ = q.get_nowait()
+                q.task_done()
+            except queue.Empty:
+                pass
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                pass
+
+    landmark_print(result, frame_rgb, timestamp_ms)
     
     
     
@@ -104,4 +131,59 @@ def close_landmarker() -> None:
     if _landmarker is not None:
         _landmarker.close()
         _landmarker = None
+
+
+def start_overlay_worker() -> None:
+    """
+    Запускает поток, который выполняет draw_overlay() по входящим landmarks.
+    Держим maxsize=1, чтобы всегда обрабатывать только "самое свежее".
+    """
+    global _overlay_thread, _overlay_stop, _overlay_queue
+    if _overlay_thread is not None and _overlay_thread.is_alive():
+        return
+
+    _overlay_queue = queue.Queue(maxsize=1)
+    _overlay_stop = threading.Event()
+
+    def _worker() -> None:
+        assert _overlay_stop is not None
+        assert _overlay_queue is not None
+        while not _overlay_stop.is_set():
+            try:
+                _ts, lm, frame_bgr = _overlay_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            try:
+                draw_overlay(lm, frame_bgr)
+            finally:
+                _overlay_queue.task_done()
+
+    _overlay_thread = threading.Thread(target=_worker, name="overlay_worker", daemon=True)
+    _overlay_thread.start()
+
+
+def stop_overlay_worker() -> None:
+    global _overlay_thread, _overlay_stop, _overlay_queue
+    if _overlay_stop is not None:
+        _overlay_stop.set()
+
+    q = _overlay_queue
+    if q is not None:
+        while True:
+            try:
+                _ = q.get_nowait()
+                q.task_done()
+            except queue.Empty:
+                break
+
+    t = _overlay_thread
+    if t is not None:
+        try:
+            t.join(timeout=1.0)
+        except Exception:
+            pass
+
+    _overlay_thread = None
+    _overlay_stop = None
+    _overlay_queue = None
 

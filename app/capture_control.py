@@ -6,8 +6,14 @@ import cv2
 from cv2_enumerate_cameras import enumerate_cameras
 from screeninfo import get_monitors
 
-from frame_storage import frames
-from pose_estimation import mp_track_pose, init_landmarker, close_landmarker
+from frame_storage import frames, tiles
+from pose_estimation import (
+    mp_track_pose,
+    init_landmarker,
+    close_landmarker,
+    start_overlay_worker,
+    stop_overlay_worker,
+)
 
 def get_screens():
     screens = get_monitors()
@@ -72,17 +78,21 @@ def start() -> None:
     cap = get_camera()
     stop_event: threading.Event | None = None
     t: threading.Thread | None = None
+    frame_queue: "queue.Queue[tuple[int, any]]" | None = None
 
     try:
+        # Важно: выбор видео/диалог должен выполняться в main thread (Windows/tkinter).
+        tiles.ensure_video_selected()
         init_landmarker()
+        start_overlay_worker()
 
         cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
-        cv2.namedWindow('Tors Deform', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Preview', cv2.WINDOW_NORMAL)
 
         # Кадры читаем в главном потоке, обработку (mp_track_pose + downstream) — в рабочем.
         # maxsize=1: всегда обрабатываем "самый свежий" кадр, а не накапливаем задержку.
-        frame_queue: "queue.Queue[tuple[int, any]]" = queue.Queue(maxsize=1)
+        frame_queue = queue.Queue(maxsize=1)
         stop_event = threading.Event()
 
         def worker() -> None:
@@ -112,7 +122,7 @@ def start() -> None:
             frame_timestamp_ms = int(time.time() * 1000)
             # Положить в очередь свежий кадр (если очередь занята — выбросить старый).
             try:
-                frame_queue.put_nowait((frame_timestamp_ms, frame.copy()))
+                frame_queue.put_nowait((frame_timestamp_ms, frame))
             except queue.Full:
                 try:
                     _ = frame_queue.get_nowait()
@@ -120,7 +130,7 @@ def start() -> None:
                 except queue.Empty:
                     pass
                 try:
-                    frame_queue.put_nowait((frame_timestamp_ms, frame.copy()))
+                    frame_queue.put_nowait((frame_timestamp_ms, frame))
                 except queue.Full:
                     # Если прямо сейчас снова занято — просто пропускаем этот кадр.
                     pass
@@ -131,23 +141,51 @@ def start() -> None:
             
             preview_frame = frames.get_preview()
             if preview_frame is not None:
-                cv2.imshow('Tors Deform', preview_frame)
+                cv2.imshow('Preview', preview_frame)
                 
             cv2.imshow('Webcam', frame)
-            
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord('q'), ord('Q'), ord('й'), ord('Й')):
+                if stop_event is not None:
+                    stop_event.set()
                 break
     
     finally:
         if stop_event is not None:
             stop_event.set()
+        if frame_queue is not None:
+            while True:
+                try:
+                    _ = frame_queue.get_nowait()
+                    frame_queue.task_done()
+                except queue.Empty:
+                    break
         if t is not None:
             try:
                 t.join(timeout=1.0)
             except Exception:
                 pass
-        close_landmarker()
-        cap.release()
+        try:
+            close_landmarker()
+        except Exception:
+            pass
+        try:
+            stop_overlay_worker()
+        except Exception:
+            pass
+        try:
+            tiles.stop_videoreader()
+        except Exception:
+            pass
+        try:
+            cap.release()
+        except Exception:
+            pass
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
