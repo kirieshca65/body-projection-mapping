@@ -389,7 +389,7 @@ class TilesStorage:
         - обрезаем видео и маску до bbox (без пустых полей),
         - собираем BGRA на обрезанной области.
 
-        Кеширует последний результат (по mask_name, размеру видео и bbox).
+        Кеширует последний результат
         """
         alpha = self.get_mask_alpha(mask_name)
         if alpha is None:

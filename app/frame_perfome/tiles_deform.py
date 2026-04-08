@@ -61,19 +61,19 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_mas
         return
     
     # Конечности: берём текущий кадр видео + фиксированную маску (BGRA)
-    ov = tiles.build_overlay_mask("mask_forearm_r.png")
+    ov = tiles.build_overlay_mask("mask_forearm_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (11, 13), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_forearm_l.png")
+    ov = tiles.build_overlay_mask("mask_forearm_r.png")
     if ov is not None:
         overlay_limbs(landmarks, (12, 14), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_thigh_r.png")
+    ov = tiles.build_overlay_mask("mask_thigh_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_thigh_l.png")
+    ov = tiles.build_overlay_mask("mask_thigh_r.png")
     if ov is not None:
         overlay_limbs(landmarks, (24, 26), frame, overlay_img=ov)
 
@@ -140,6 +140,8 @@ def overlay_limbs(
     global width_scale, extend_scale
     if overlay_img is None:
         overlay_img = tiles.get_torso()
+        
+    overlay_img = cv2.rotate(overlay_img, cv2.ROTATE_90_CLOCKWISE)
 
     if landmarks[0] is None or frame is None or overlay_img is None:
         return
@@ -169,10 +171,10 @@ def overlay_limbs(
     # Четыре угла прямоугольника вокруг отрезка
     dst_pts = np.array(
         [
-            p1e + perp * half_width,
             p2e + perp * half_width,
-            p2e - perp * half_width,
+            p1e + perp * half_width,
             p1e - perp * half_width,
+            p2e - perp * half_width,
         ],
         dtype="float32",
     )
