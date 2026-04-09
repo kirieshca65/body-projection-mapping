@@ -60,31 +60,39 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_mas
     if frame is None or landmarks is None:
         return
     
-    # Конечности: берём текущий кадр видео + фиксированную маску (BGRA)
-    ov = tiles.build_overlay_mask("mask_forearm_l.png")
+    # Пакетно собираем overlay-ы по всем маскам из одного видео-кадра.
+    mask_names = [
+        "mask_forearm_l.png",
+        "mask_forearm_r.png",
+        "mask_thigh_l.png",
+        "mask_thigh_r.png",
+        "mask_torso.png",
+    ]
+    overlays = tiles.build_overlay_masks_batch(mask_names)
+
+    ov = overlays.get("mask_forearm_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (11, 13), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_forearm_r.png")
+    ov = overlays.get("mask_forearm_r.png")
     if ov is not None:
         overlay_limbs(landmarks, (12, 14), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_thigh_l.png")
+    ov = overlays.get("mask_thigh_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_thigh_r.png")
+    ov = overlays.get("mask_thigh_r.png")
     if ov is not None:
         overlay_limbs(landmarks, (24, 26), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_torso.png")
+    ov = overlays.get("mask_torso.png")
     if ov is not None:
         overlay_torso(landmarks, frame, overlay_img=ov)
     
     """Применение маски сегментации"""
-    """if segmentation_masks is not None:
-        frame = apply_segmentation_alpha(frame, segmentation_masks, threshold=1)"""
-
+    if segmentation_masks is not None:
+        frame = apply_segmentation_alpha(frame, segmentation_masks, threshold=1)
     frames.set_preview(frame)
 
 

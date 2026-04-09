@@ -391,49 +391,71 @@ class TilesStorage:
 
         Кеширует последний результат
         """
-        alpha = self.get_mask_alpha(mask_name)
-        if alpha is None:
-            return None
+        overlays = self.build_overlay_masks_batch([mask_name])
+        return overlays.get(mask_name)
 
-        video_bgr = self.get_video_frame()
+    def build_overlay_masks_batch(
+        self,
+        mask_names: List[str],
+        video_bgr: Optional[np.ndarray] = None,
+    ) -> Dict[str, np.ndarray]:
+        """
+        Пакетная версия сборки overlay-ов для списка mask_names.
+
+        Главная цель: использовать один и тот же кадр видео для всех масок
+        (синхронность по времени + меньше накладных расходов на get_video_frame()).
+        Возвращает словарь mask_name -> BGRA overlay только для успешно собранных масок.
+        """
+        if not mask_names:
+            return {}
+
         if video_bgr is None:
-            return None
+            video_bgr = self.get_video_frame()
+        if video_bgr is None:
+            return {}
 
         vh, vw = video_bgr.shape[:2]
+        out: Dict[str, np.ndarray] = {}
 
-        # Маска должна быть в разрешении видео: предпочитаем заранее подготовленную.
-        alpha_scaled = None
-        if self._masks_alpha_scaled_res == (vh, vw):
-            alpha_scaled = self._masks_alpha_scaled.get(mask_name)
-        if alpha_scaled is None:
-            # Фоллбэк: если prepare_masks_for_video() не сработал — масштабируем на лету.
-            alpha_scaled = (
-                alpha
-                if alpha.shape[:2] == (vh, vw)
-                else cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
-            )
+        for mask_name in mask_names:
+            alpha = self.get_mask_alpha(mask_name)
+            if alpha is None:
+                continue
 
-        # Находим bbox ненулевой альфы.
-        ys, xs = np.where(alpha_scaled > 0)
-        if ys.size == 0 or xs.size == 0:
-            return None
-        y0, y1 = int(ys.min()), int(ys.max()) + 1
-        x0, x1 = int(xs.min()), int(xs.max()) + 1
+            # Маска должна быть в разрешении видео: предпочитаем заранее подготовленную.
+            alpha_scaled = None
+            if self._masks_alpha_scaled_res == (vh, vw):
+                alpha_scaled = self._masks_alpha_scaled.get(mask_name)
+            if alpha_scaled is None:
+                # Фоллбэк: если prepare_masks_for_video() не сработал — масштабируем на лету.
+                alpha_scaled = (
+                    alpha
+                    if alpha.shape[:2] == (vh, vw)
+                    else cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
+                )
 
-        key = mask_name
-        cached = self._overlay_cache.get(key)
-        if cached is not None and cached[0] == (vh, vw) and cached[1] == (y0, y1, x0, x1):
-            overlay = cached[2]
-        else:
-            alpha_crop = alpha_scaled[y0:y1, x0:x1]
-            h, w = alpha_crop.shape[:2]
-            overlay = np.zeros((h, w, 4), dtype=np.uint8)
-            overlay[:, :, 3] = alpha_crop
-            self._overlay_cache[key] = ((vh, vw), (y0, y1, x0, x1), overlay)
+            # Находим bbox ненулевой альфы.
+            ys, xs = np.where(alpha_scaled > 0)
+            if ys.size == 0 or xs.size == 0:
+                continue
+            y0, y1 = int(ys.min()), int(ys.max()) + 1
+            x0, x1 = int(xs.min()), int(xs.max()) + 1
 
-        video_crop = video_bgr[y0:y1, x0:x1]
-        overlay[:, :, :3] = video_crop
-        return overlay
+            key = mask_name
+            cached = self._overlay_cache.get(key)
+            if cached is not None and cached[0] == (vh, vw) and cached[1] == (y0, y1, x0, x1):
+                overlay = cached[2]
+            else:
+                alpha_crop = alpha_scaled[y0:y1, x0:x1]
+                h, w = alpha_crop.shape[:2]
+                overlay = np.zeros((h, w, 4), dtype=np.uint8)
+                overlay[:, :, 3] = alpha_crop
+                self._overlay_cache[key] = ((vh, vw), (y0, y1, x0, x1), overlay)
+
+            overlay[:, :, :3] = video_bgr[y0:y1, x0:x1]
+            out[mask_name] = overlay
+
+        return out
 
 """Единственный экземпляр — создаётся при первом импорте модуля"""
 frames: FrameStorage = FrameStorage()
