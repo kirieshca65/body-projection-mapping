@@ -61,41 +61,47 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
     """latest_pose_frame импортируется из capture_control для дальнейшего вывода"""
     global latest_pose_frame
     
-    segmentation_masks = result.segmentation_masks[0].numpy_view()
-    result = result.pose_landmarks
-    if result[0] is not None:
-        if segmentation_masks is not None:
-            segmentation_masks = segmentation_masks.astype(np.uint8) * 255
-            #segmentation_masks = cv2.cvtColor(segmentation_masks, cv2.COLOR_GRAY2BGR)
+    try:
+        segmentation_masks = result.segmentation_masks[0].numpy_view()
+    except Exception:
+        segmentation_masks = None
 
-        if result is None:
-            return
-        frame_rgb = output_image.numpy_view().copy()
-        #print('pose landmarker result: {}'.format(result))
+    try:    
+        result = result.pose_landmarks
+        if result[0] is None:
+            raise
+    except Exception:
+        return
 
-        # Передаём landmarks+кадр в отдельный поток для overlay, чтобы:
-        q = _overlay_queue
-        if q is not None:
-            #frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            payload = (timestamp_ms, result, frames.get_webcam(), segmentation_masks)
+    if segmentation_masks is not None:
+        segmentation_masks = segmentation_masks.astype(np.uint8) * 255
+        #segmentation_masks = cv2.cvtColor(segmentation_masks, cv2.COLOR_GRAY2BGR)
+
+    if result is None:
+        return
+    frame_rgb = output_image.numpy_view().copy()
+    #print('pose landmarker result: {}'.format(result))
+
+    # Передаём landmarks+кадр в отдельный поток для overlay, чтобы:
+    q = _overlay_queue
+    if q is not None:
+        #frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        payload = (timestamp_ms, result, frames.get_webcam(), segmentation_masks)
+        try:
+            q.put_nowait(payload)
+        except queue.Full:
+            try:
+                _ = q.get_nowait()
+                q.task_done()
+            except queue.Empty:
+                pass
             try:
                 q.put_nowait(payload)
             except queue.Full:
-                try:
-                    _ = q.get_nowait()
-                    q.task_done()
-                except queue.Empty:
-                    pass
-                try:
-                    q.put_nowait(payload)
-                except queue.Full:
-                    pass
+                pass
 
-        landmark_print(result, frame_rgb, timestamp_ms)
-    else:
-        return
-    
-    
+    landmark_print(result, frame_rgb, timestamp_ms)
+
     
 def landmark_print(landmarks, frame, timestamp: int):
     """Стили отрисовки: заполняем все индексы, чтобы не было KeyError"""

@@ -91,8 +91,8 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_mas
         overlay_torso(landmarks, frame, overlay_img=ov)
     
     """Применение маски сегментации"""
-    if segmentation_masks is not None:
-        frame = apply_segmentation_alpha(frame, segmentation_masks, threshold=1)
+    """if segmentation_masks is not None:
+        frame = apply_segmentation_alpha(frame, segmentation_masks, threshold=1)"""
     frames.set_preview(frame)
 
 

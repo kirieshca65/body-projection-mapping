@@ -71,6 +71,8 @@ def get_camera() -> cv2.VideoCapture:
             continue
         backend = cameras[index].backend
         cap = cv2.VideoCapture(cameras[index].index, backend)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1980)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         if not cap.isOpened():
             print(f"Unable to open webcam with index {index}.")
             continue
@@ -79,7 +81,7 @@ def get_camera() -> cv2.VideoCapture:
             if ok and frame is not None:
                 height, width = frame.shape[:2]
                 frames.set_webcam_res(width, height)
-            #print(frames.get_webcam_res())
+            print(frames.get_webcam_res())
             return cap
 
 
