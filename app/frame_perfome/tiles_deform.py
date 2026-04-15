@@ -8,7 +8,9 @@ except ImportError:
     from frame_storage import frames, tiles
 
 """Коффициент добавочного масштабирования торса"""
-size_adjust : float =  1.25
+size_adjust : float =  1.1
+"""Вертикальный сдвиг torso tile вверх (доля высоты кадра)"""
+torso_y_shift : float = 0.015
 """
 - width_scale: ширина полосы как доля длины отрезка
 - extend_scale: насколько продлить отрезок за точки (доля длины)
@@ -72,19 +74,19 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_mas
 
     ov = overlays.get("mask_forearm_l.png")
     if ov is not None:
-        overlay_limbs(landmarks, (11, 13), frame, overlay_img=ov)
+        overlay_limbs(landmarks, (12, 14), frame, overlay_img=ov)
 
     ov = overlays.get("mask_forearm_r.png")
     if ov is not None:
-        overlay_limbs(landmarks, (12, 14), frame, overlay_img=ov)
+        overlay_limbs(landmarks, (11, 13), frame, overlay_img=ov)
 
     ov = overlays.get("mask_thigh_l.png")
     if ov is not None:
-        overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)
+        overlay_limbs(landmarks, (24, 26), frame, overlay_img=ov)
 
     ov = overlays.get("mask_thigh_r.png")
     if ov is not None:
-        overlay_limbs(landmarks, (24, 26), frame, overlay_img=ov)
+        overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)
 
     ov = overlays.get("mask_torso.png")
     if ov is not None:
@@ -118,15 +120,17 @@ def overlay_torso(
     # Порядок: [Левое плечо, Правое плечо, Правое бедро, Левое бедро]
     landmark = landmarks[0]
     torso_idx = (11, 12, 24, 23)
+    torso_idx = (12, 11, 23, 24)
     dst_raw = [
         np.array([landmark[i].x * fw, landmark[i].y * fh], dtype=np.float32) for i in torso_idx
     ]
     dst_pts = np.array([_POINT_SMOOTHER.update(i, p) for i, p in zip(torso_idx, dst_raw)], dtype=np.float32)
 
     """Применение дополнительного увеличения"""
-    global size_adjust
+    global size_adjust, torso_y_shift
     center = dst_pts.mean(axis=0, keepdims=True)
     dst_pts = (dst_pts - center) * size_adjust + center
+    dst_pts[:, 1] -= fh * float(torso_y_shift)
 
 
     # быстрый варп+альфа только по ROI

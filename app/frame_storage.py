@@ -136,6 +136,7 @@ class FrameStorage:
 
 @dataclass
 class TilesStorage:
+    """Outadated: используются для вывода статичных кадров под вывод"""
     torso: Optional[np.ndarray] = None
     l_arm: Optional[np.ndarray] = None
     r_arm: Optional[np.ndarray] = None
@@ -441,18 +442,23 @@ class TilesStorage:
             y0, y1 = int(ys.min()), int(ys.max()) + 1
             x0, x1 = int(xs.min()), int(xs.max()) + 1
 
+            alpha_crop = alpha_scaled[y0:y1, x0:x1]
             key = mask_name
             cached = self._overlay_cache.get(key)
             if cached is not None and cached[0] == (vh, vw) and cached[1] == (y0, y1, x0, x1):
                 overlay = cached[2]
             else:
-                alpha_crop = alpha_scaled[y0:y1, x0:x1]
                 h, w = alpha_crop.shape[:2]
                 overlay = np.zeros((h, w, 4), dtype=np.uint8)
-                overlay[:, :, 3] = alpha_crop
                 self._overlay_cache[key] = ((vh, vw), (y0, y1, x0, x1), overlay)
 
-            overlay[:, :, :3] = video_bgr[y0:y1, x0:x1]
+            video_crop = video_bgr[y0:y1, x0:x1]
+            overlay[:, :, :3] = video_crop
+            overlay[:, :, 3] = alpha_crop
+
+            # Черные пиксели в источнике считаются прозрачными.
+            black_pixels = np.all(video_crop == 0, axis=2)
+            overlay[:, :, 3][black_pixels] = 0
             out[mask_name] = overlay
 
         return out
