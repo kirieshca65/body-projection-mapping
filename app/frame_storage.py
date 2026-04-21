@@ -72,6 +72,9 @@ class FrameStorage:
     tiles_frames: Optional[np.ndarray] = None      # Кадр с наложенным контентом
     preview_frames: Optional[np.ndarray] = None    # Кадр с наложенным контентом над вебкамерой
     mapping_frame: Optional[np.ndarray] = None     # Конечный кадр для вывода на проектор
+    homography_cam_to_proj: Optional[np.ndarray] = None  # 3x3: камера -> проектор (прямоугольник экрана)
+    calibration_active: bool = False
+
     _rwlock: RWLock = field(default_factory=RWLock, init=False, repr=False)
 
     def set_webcam(self, frame: np.ndarray) -> None:
@@ -118,21 +121,63 @@ class FrameStorage:
     mapping_res : Optional[Tuple[int, int]] = None
     webcam_res : Optional[Tuple[int, int]] = None
 
+    projector_back : Optional[np.ndarray] = None # Фоновое черное изобрежение, которое используется для фона под проектор
+
     def set_mapping_res(self, width : int, height : int):
         with self._rwlock.write_lock():
             self.mapping_res = (width, height)
+            print(f"Projector resolution: {width, height}")
+            self._init_proj_back(self.mapping_res)
 
     def get_mapping_res(self):
         with self._rwlock.read_lock():
-            return self.mapping_res
+            return self.mapping_res 
     
     def set_webcam_res(self, width : int, height : int):
         with self._rwlock.write_lock():
             self.webcam_res = (width, height)
+            
+      
+    def _init_proj_back(self, resolution):
+        # resolution хранится как (width, height), а numpy ожидает (height, width, channels)
+        width, height = resolution
+        self.projector_back = np.zeros((height, width, 3), dtype=np.uint8)
+        print(f"Projector background resolution: {self.projector_back.shape[:2]}")
+
+    def set_proj_back(self, frame: np.ndarray) -> None:
+        """Установка внешнего фона для превью/проектора."""
+        with self._rwlock.write_lock():
+            self.projector_back = frame.copy() if frame is not None else None
+
+    def get_proj_back(self):
+        """Получение изображения черного фона под проектор"""
+        with self._rwlock.read_lock():
+            return self.projector_back.copy() if self.projector_back is not None else None
 
     def get_webcam_res(self):
         with self._rwlock.read_lock():
             return self.webcam_res
+
+    def set_homography_cam_to_proj(self, H: Optional[np.ndarray]) -> None:
+        with self._rwlock.write_lock():
+            if H is None:
+                self.homography_cam_to_proj = None
+            else:
+                self.homography_cam_to_proj = np.asarray(H, dtype=np.float64).copy()
+
+    def get_homography_cam_to_proj(self) -> Optional[np.ndarray]:
+        with self._rwlock.read_lock():
+            if self.homography_cam_to_proj is None:
+                return None
+            return self.homography_cam_to_proj.copy()
+
+    def set_calibration_active(self, active: bool) -> None:
+        with self._rwlock.write_lock():
+            self.calibration_active = bool(active)
+
+    def get_calibration_active(self) -> bool:
+        with self._rwlock.read_lock():
+            return self.calibration_active
 
 @dataclass
 class TilesStorage:
@@ -456,9 +501,6 @@ class TilesStorage:
             overlay[:, :, :3] = video_crop
             overlay[:, :, 3] = alpha_crop
 
-            # Черные пиксели в источнике считаются прозрачными.
-            black_pixels = np.all(video_crop == 0, axis=2)
-            overlay[:, :, 3][black_pixels] = 0
             out[mask_name] = overlay
 
         return out

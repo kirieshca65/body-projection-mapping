@@ -59,9 +59,9 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_mas
     Если `frame` не передан — берём кадр из `frames.get_webcam()` (fallback).
     Для устранения рассинхрона предпочтительно всегда передавать кадр явно.
     """
-    if frame is None or landmarks is None:
+    if landmarks is None or frame is None:
         return
-    
+
     # Пакетно собираем overlay-ы по всем маскам из одного видео-кадра.
     mask_names = [
         "mask_forearm_l.png",
@@ -72,6 +72,7 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_mas
     ]
     overlays = tiles.build_overlay_masks_batch(mask_names)
 
+      
     ov = overlays.get("mask_forearm_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (12, 14), frame, overlay_img=ov)
@@ -273,10 +274,12 @@ def _warp_and_blend_roi(
         warped_rgb = warped[:, :, :3].astype(np.float32)
 
     # Векторное смешивание (in-place запись обратно в roi)
-    roi_f = roi.astype(np.float32)
-    out = warped_rgb * alpha3 + roi_f * (1.0 - alpha3)
+    if roi.ndim != 3 or roi.shape[2] < 3:
+        return
+    roi_rgb_f = roi[:, :, :3].astype(np.float32)
+    out = warped_rgb * alpha3 + roi_rgb_f * (1.0 - alpha3)
     np.clip(out, 0, 255, out=out)
-    roi[:] = out.astype(np.uint8)
+    roi[:, :, :3] = out.astype(np.uint8)
     
 def crop_frame_by_segmentation_mask(
     frame: np.ndarray,
