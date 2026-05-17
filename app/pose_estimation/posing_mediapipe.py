@@ -86,7 +86,7 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
     q = _overlay_queue
     if q is not None:
         #frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        payload = (timestamp_ms, result, frames.get_proj_back(), segmentation_masks)
+        payload = (timestamp_ms, result, frames.get_webcam(), segmentation_masks)
         try:
             q.put_nowait(payload)
         except queue.Full:

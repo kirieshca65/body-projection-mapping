@@ -101,11 +101,7 @@ def get_camera() -> cv2.VideoCapture:
             print(frames.get_webcam_res())
             return cap
 
-def _get_camer_frame(camera : cv2.VideoCapture) -> tuple[bool, cv2.typing.MatLike]:
-    success, frame = camera.read()
-
-
-    
+   
 def start() -> None:
     cap = get_camera()
     projector_monitor = select_projector_monitor()
@@ -122,6 +118,7 @@ def start() -> None:
         cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
         cv2.namedWindow('Preview', cv2.WINDOW_NORMAL)
+        cv2.namedWindow('Mapping', cv2.WINDOW_NORMAL)
 
         # Кадры читаем в главном потоке, обработку (mp_track_pose + downstream) — в рабочем.
         # maxsize=1: всегда обрабатываем "самый свежий" кадр, а не накапливаем задержку.
@@ -146,10 +143,14 @@ def start() -> None:
         t.start()
 
         preview_fullscreen_applied = False
+        homography_check = False
+        
         print(
             "Калибровка: c — показать/скрыть ArUco на проекторе, "
             "h — оценить homography (камера→проектор) по кадру, q — выход."
         )
+
+        mapping_res = frames.get_mapping_res()
 
         while True:
             success, frame = cap.read()
@@ -178,22 +179,28 @@ def start() -> None:
             if pose_frame is not None:
                 cv2.imshow('Pose Estimation', pose_frame)
             
-            mapping_res = frames.get_mapping_res()
-            if frames.get_calibration_active() and mapping_res is not None:
-                pw, ph = mapping_res
-                preview_frame = build_calibration_image(pw, ph)
-            else:
-                preview_frame = frames.get_preview()
+            preview_frame = frames.get_preview()
             if preview_frame is not None:
                 cv2.imshow('Preview', preview_frame)
+            
+            if frames.get_calibration_active() and mapping_res is not None:
+                pw, ph = mapping_res
+                mapping_frame = build_calibration_image(pw, ph)
+            elif homography_check:
+                mapping_frame = frames.get_webcam_warped_to_projector()
+            else:
+                mapping_frame = frames.get_mapping()
+
+            if mapping_frame is not None:
+                cv2.imshow('Mapping', mapping_frame)
                 if projector_monitor is not None and not preview_fullscreen_applied:
                     cv2.moveWindow(
-                        'Preview',
+                        'Mapping',
                         projector_monitor.x,
                         projector_monitor.y,
                     )
                     cv2.setWindowProperty(
-                        'Preview',
+                        'Mapping',
                         cv2.WND_PROP_FULLSCREEN,
                         cv2.WINDOW_FULLSCREEN,
                     )
@@ -202,26 +209,37 @@ def start() -> None:
             cv2.imshow('Webcam', frame)
 
             key = cv2.waitKey(1) & 0xFF
-            if key in (ord('q'), ord('Q'), ord('й'), ord('Й')):
-                if stop_event is not None:
-                    stop_event.set()
-            if key in (ord("c"), ord("C"), ord("с"), ord("С")):
-                nxt = not frames.get_calibration_active()
-                frames.set_calibration_active(nxt)
-                print("Режим калибровки (ArUco на проекторе):", "вкл" if nxt else "выкл")
-            elif key in (ord("h"), ord("H"), ord("р"), ord("Р")):
-                if mapping_res is None:
-                    print("Сначала выберите монитор / задано mapping_res.")
-                else:
-                    H, info = estimate_homography_cam_to_proj(frame, mapping_res)
-                    if H is not None:
-                        frames.set_homography_cam_to_proj(H)
-                        print("Сохранена homography_cam_to_proj (камера→проектор).", info)
+            if key:
+                if key in (ord('q'), ord('Q'), ord('й'), ord('Й')):
+                    if stop_event is not None:
+                        stop_event.set()
+                    break
+                
+                if key in (ord("c"), ord("C"), ord("с"), ord("С")):
+                    nxt = not frames.get_calibration_active()
+                    frames.set_calibration_active(nxt)
+                    print("Режим калибровки (ArUco на проекторе):", "вкл" if nxt else "выкл")
+
+                if key in (ord("h"), ord("H"), ord("р"), ord("Р")):
+                    if mapping_res is None:
+                        print("Сначала выберите монитор / задано mapping_res.")
                     else:
-                        print("Homography не оценена:", info)
-            
-                break
-    
+                        H, info = estimate_homography_cam_to_proj(frame, mapping_res)
+                        if H is not None:
+                            frames.set_homography_cam_to_proj(H)
+                            print("Сохранена homography_cam_to_proj (камера→проектор).", info)
+                            print("H (камера → проектор):")
+                            for row in H:
+                                print(
+                                    "  ["
+                                    + "  ".join(f"{v:12.6f}" for v in row)
+                                    + "]"
+                                )
+                                homography_check = True
+                        else:
+                            print("Homography не оценена:", info)
+                
+        
     finally:
         if stop_event is not None:
             stop_event.set()

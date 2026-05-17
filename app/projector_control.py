@@ -5,8 +5,8 @@
 камеры в координаты экрана проектора — как «повернуть» и выровнять вид камеры под прямоугольник
 проектора.
 
-Для cv2.warpPerspective нужна обратная связка «куда в исходнике смотреть для каждого пикселя
-выхода»: передаём np.linalg.inv(H_cam_to_proj) (проектор → камера).
+Применение H к кадру — frames.get_webcam_warped_to_projector() в frame_storage
+(inv(H) для cv2.warpPerspective).
 """
 
 from __future__ import annotations
@@ -136,28 +136,4 @@ def estimate_homography_cam_to_proj(
         err_mean = float(err_all.mean())
 
     return H, f"точек {len(pts_p)}, inliers RANSAC {int(inliers.sum())}, ср. ошибка ~{err_mean:.2f} px"
-
-
-def warp_camera_to_projector_plane(
-    camera_bgr: np.ndarray,
-    H_cam_to_proj: np.ndarray,
-    proj_wh: Tuple[int, int],
-) -> np.ndarray:
-    """
-    Ректифицирует кадр камеры в разрешение экрана проектора (мозаика «под экран»).
-
-    H_cam_to_proj: точки плоскости камеры → плоскость проектора.
-    В warpPerspective задаётся обратное отображение: пиксель выхода (проектор) → пиксель входа (камера).
-    """
-    M = np.linalg.inv(H_cam_to_proj)
-    w, h = proj_wh
-    return cv2.warpPerspective(
-        camera_bgr,
-        M,
-        (w, h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0),
-    )
-
 

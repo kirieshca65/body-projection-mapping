@@ -74,6 +74,8 @@ class FrameStorage:
     mapping_frame: Optional[np.ndarray] = None     # Конечный кадр для вывода на проектор
     homography_cam_to_proj: Optional[np.ndarray] = None  # 3x3: камера -> проектор (прямоугольник экрана)
     calibration_active: bool = False
+    homography_cam_to_proj: Optional[np.ndarray] = None  # 3x3: камера -> проектор (прямоугольник экрана)
+    calibration_active: bool = False
 
     _rwlock: RWLock = field(default_factory=RWLock, init=False, repr=False)
 
@@ -178,6 +180,68 @@ class FrameStorage:
     def get_calibration_active(self) -> bool:
         with self._rwlock.read_lock():
             return self.calibration_active
+
+    def set_homography_cam_to_proj(self, H: Optional[np.ndarray]) -> None:
+        with self._rwlock.write_lock():
+            if H is None:
+                self.homography_cam_to_proj = None
+            else:
+                self.homography_cam_to_proj = np.asarray(H, dtype=np.float64).copy()
+
+    def get_homography_cam_to_proj(self) -> Optional[np.ndarray]:
+        with self._rwlock.read_lock():
+            if self.homography_cam_to_proj is None:
+                return None
+            return self.homography_cam_to_proj.copy()
+
+    def set_calibration_active(self, active: bool) -> None:
+        with self._rwlock.write_lock():
+            self.calibration_active = bool(active)
+
+    def get_calibration_active(self) -> bool:
+        with self._rwlock.read_lock():
+            return self.calibration_active
+
+    @staticmethod
+    def _warp_camera_to_projector_plane(
+        camera_bgr: np.ndarray,
+        H_cam_to_proj: np.ndarray,
+        proj_wh: Tuple[int, int],
+    ) -> np.ndarray:
+        """
+        Ректифицирует кадр камеры в разрешение экрана проектора.
+
+        H_cam_to_proj: камера → проектор; в warpPerspective — inv(H).
+        """
+        M = np.linalg.inv(H_cam_to_proj)
+        w, h = proj_wh
+        return cv2.warpPerspective(
+            camera_bgr,
+            M,
+            (w, h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0),
+        )
+
+    def get_webcam_warped_to_projector(self) -> Optional[np.ndarray]:
+        """
+        Кадр веб-камеры, выровненный в координаты экрана проектора (homography_cam_to_proj).
+
+        None, если нет кадра, матрицы или mapping_res.
+        """
+        with self._rwlock.read_lock():
+            if (
+                self.webcam_frame is None
+                or self.homography_cam_to_proj is None
+                or self.mapping_res is None
+            ):
+                return None
+            frame = self.webcam_frame.copy()
+            H = self.homography_cam_to_proj.copy()
+            proj_wh = self.mapping_res
+
+        return self._warp_camera_to_projector_plane(frame, H, proj_wh)
 
 @dataclass
 class TilesStorage:
