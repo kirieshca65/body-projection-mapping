@@ -4,6 +4,7 @@ import queue
 import sys
 import cv2
 from cv2_enumerate_cameras import enumerate_cameras
+
 from screeninfo import get_monitors
 
 try:
@@ -150,7 +151,7 @@ def start() -> None:
             "h — оценить homography (камера→проектор) по кадру, q — выход."
         )
 
-        mapping_res = frames.get_mapping_res()
+       
 
         while True:
             success, frame = cap.read()
@@ -182,14 +183,16 @@ def start() -> None:
             preview_frame = frames.get_preview()
             if preview_frame is not None:
                 cv2.imshow('Preview', preview_frame)
-            
+
+            mapping_res = frames.get_mapping_res()
             if frames.get_calibration_active() and mapping_res is not None:
                 pw, ph = mapping_res
                 mapping_frame = build_calibration_image(pw, ph)
-            elif homography_check:
-                mapping_frame = frames.get_webcam_warped_to_projector()
+           
             else:
                 mapping_frame = frames.get_mapping()
+                """elif homography_check:
+                mapping_frame = frames.get_webcam_warped_to_projector()"""
 
             if mapping_frame is not None:
                 cv2.imshow('Mapping', mapping_frame)

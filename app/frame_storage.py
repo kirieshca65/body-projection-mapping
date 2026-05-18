@@ -119,6 +119,23 @@ class FrameStorage:
         with self._rwlock.read_lock():
             return self.mapping_frame.copy() if self.mapping_frame is not None else None
 
+    def get_lined_mapping(self) -> Optional[np.ndarray]:
+        with self._rwlock.read_lock():
+            if self.mapping_frame is None:
+                return None
+            else:
+                image = self.mapping_frame.copy()
+                height, width = image.shape[:2]
+                #print(f"Mapping frame: width = {width} height = {height}")
+                for x in range(0, width, 100):
+                    cv2.line(image, (x, 0), (x, height), (0, 255,0), 1)
+
+                # Горизонтальные линии
+                for y in range(0, height, 100):
+                    cv2.line(image, (0, y), (width, y), (0, 255,0), 1)
+
+                return image
+
     """Разрешение проектора и вебкамеры"""
     mapping_res : Optional[Tuple[int, int]] = None
     webcam_res : Optional[Tuple[int, int]] = None
@@ -128,7 +145,7 @@ class FrameStorage:
     def set_mapping_res(self, width : int, height : int):
         with self._rwlock.write_lock():
             self.mapping_res = (width, height)
-            print(f"Projector resolution: {width, height}")
+            print(f"Projector resolution: {self.mapping_res}")
             self._init_proj_back(self.mapping_res)
 
     def get_mapping_res(self):
@@ -217,7 +234,7 @@ class FrameStorage:
         w, h = proj_wh
         return cv2.warpPerspective(
             camera_bgr,
-            M,
+            H_cam_to_proj,
             (w, h),
             flags=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT,
@@ -232,12 +249,12 @@ class FrameStorage:
         """
         with self._rwlock.read_lock():
             if (
-                self.webcam_frame is None
+                self.mapping_frame is None
                 or self.homography_cam_to_proj is None
                 or self.mapping_res is None
             ):
                 return None
-            frame = self.webcam_frame.copy()
+            frame = self.mapping_frame.copy()
             H = self.homography_cam_to_proj.copy()
             proj_wh = self.mapping_res
 

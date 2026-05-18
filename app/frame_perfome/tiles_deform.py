@@ -1,4 +1,3 @@
-from turtle import back
 from typing import Optional
 import cv2
 import numpy as np
@@ -50,6 +49,39 @@ class _ExpSmoother2D:
 
 
 _POINT_SMOOTHER = _ExpSmoother2D(alpha=0.6)
+
+
+def _cam_dst_pts_to_projector(
+    dst_pts: np.ndarray,
+    cam_hw: tuple[int, int],
+    proj_hw: tuple[int, int],
+) -> np.ndarray:
+    """
+    Точки четырёхугольника в пикселях кадра камеры -> в пиксели буфера проектора.
+
+    Если задана homography_cam_to_proj — используем её.
+    Иначе — равномерное масштабирование по размеру кадра и фона.
+    """
+    ch, cw = cam_hw
+    ph, pw = proj_hw
+    pts = np.asarray(dst_pts, dtype=np.float64).reshape(-1, 2)
+    n = pts.shape[0]
+
+    H = frames.get_homography_cam_to_proj()
+    if H is not None:
+        H = np.asarray(H, dtype=np.float64)
+        hom = np.hstack([pts, np.ones((n, 1), dtype=np.float64)])
+        out = (H @ hom.T).T
+        w = out[:, 2:3]
+        w = np.where(np.abs(w) < 1e-9, 1e-9, w)
+        out = out[:, :2] / w
+        return out.astype(np.float32)
+
+    if pw == cw and ph == ch:
+        return pts.astype(np.float32)
+
+    scale = np.array([pw / cw, ph / ch], dtype=np.float64)
+    return (pts * scale).astype(np.float32)
 
 
 def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_masks: Optional[np.ndarray] = None) -> None:
@@ -134,9 +166,11 @@ def overlay_torso(
 
 
     # быстрый варп+альфа только по ROI
-    _warp_and_blend_roi(frame, overlay_img, dst_pts)
     global background
-    _warp_and_blend_roi(background, overlay_img, dst_pts)
+    dst_bg = _cam_dst_pts_to_projector(dst_pts, (fh, fw), background.shape[:2])
+    _warp_and_blend_roi(background, overlay_img, dst_bg)
+    _warp_and_blend_roi(frame, overlay_img, dst_pts)
+    
 
     return
 
@@ -196,9 +230,11 @@ def overlay_limbs(
 
 
     # быстрый варп+альфа только по ROI
-    _warp_and_blend_roi(frame, overlay_img, dst_pts)
     global background
-    _warp_and_blend_roi(background, overlay_img, dst_pts)
+    dst_bg = _cam_dst_pts_to_projector(dst_pts, (fh, fw), background.shape[:2])
+    _warp_and_blend_roi(background, overlay_img, dst_bg)
+    _warp_and_blend_roi(frame, overlay_img, dst_pts)
+    
     return
 
 
