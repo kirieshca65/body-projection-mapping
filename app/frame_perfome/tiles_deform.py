@@ -10,7 +10,7 @@ except ImportError:
 """Коффициент добавочного масштабирования торса"""
 size_adjust : float =  1.1
 """Вертикальный сдвиг torso tile вверх (доля высоты кадра)"""
-torso_y_shift : float = 0.015
+torso_y_shift : float = 0.02
 """
 - width_scale: ширина полосы как доля длины отрезка
 - extend_scale: насколько продлить отрезок за точки (доля длины)
@@ -127,7 +127,7 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_mas
     if ov is not None:
         overlay_torso(landmarks, frame, overlay_img=ov)
     
-    frames.set_preview(frame)
+    frames.set_preview(background)
     frames.set_mapping(background)
 
 
@@ -146,7 +146,8 @@ def overlay_torso(
     if landmarks[0] is None or frame is None or overlay_img is None:
         return
 
-    fh, fw = frame.shape[:2]
+    global background
+    fh, fw = background.shape[:2]
 
     # Извлекаем координаты 4 точек из MediaPipe (x, y в пикселях)
     # Порядок: [Левое плечо, Правое плечо, Правое бедро, Левое бедро]
@@ -166,12 +167,11 @@ def overlay_torso(
 
 
     # быстрый варп+альфа только по ROI
-    global background
-    dst_bg = _cam_dst_pts_to_projector(dst_pts, (fh, fw), background.shape[:2])
-    _warp_and_blend_roi(background, overlay_img, dst_bg)
-    _warp_and_blend_roi(frame, overlay_img, dst_pts)
     
-
+    #dst_bg = _cam_dst_pts_to_projector(dst_pts, (fh, fw), background.shape[:2])
+    _warp_and_blend_roi(background, overlay_img, dst_pts)
+    #_warp_and_blend_roi(frame, overlay_img, dst_pts)
+    
     return
 
 
@@ -195,7 +195,8 @@ def overlay_limbs(
     if landmarks[0] is None or frame is None or overlay_img is None:
         return
 
-    fh, fw = frame.shape[:2]
+    global background
+    fh, fw = background.shape[:2]
     landmark = landmarks[0]
     p1_raw = np.array([landmark[limbs[0]].x * fw, landmark[limbs[0]].y * fh], dtype=np.float32)
     p2_raw = np.array([landmark[limbs[1]].x * fw, landmark[limbs[1]].y * fh], dtype=np.float32)
@@ -227,13 +228,14 @@ def overlay_limbs(
         ],
         dtype="float32",
     )
-
-
+    
+    global torso_y_shift
+    dst_pts[:, 1] -= fh * float(torso_y_shift)
     # быстрый варп+альфа только по ROI
-    global background
-    dst_bg = _cam_dst_pts_to_projector(dst_pts, (fh, fw), background.shape[:2])
-    _warp_and_blend_roi(background, overlay_img, dst_bg)
-    _warp_and_blend_roi(frame, overlay_img, dst_pts)
+
+    #dst_bg = _cam_dst_pts_to_projector(dst_pts, (fh, fw), background.shape[:2])
+    _warp_and_blend_roi(background, overlay_img, dst_pts)
+    #_warp_and_blend_roi(frame, overlay_img, dst_pts)
     
     return
 

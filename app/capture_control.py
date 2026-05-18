@@ -149,20 +149,23 @@ def start() -> None:
         print(
             "Калибровка: c — показать/скрыть ArUco на проекторе, "
             "h — оценить homography (камера→проектор) по кадру, q — выход."
+            "d - сбросить homography"
         )
 
        
-
         while True:
             success, frame = cap.read()
-            #print(frame)
 
             if not success:
                 continue
+            frames.set_webcam(frame)
 
             frame_timestamp_ms = int(time.time() * 1000)
+            
             # Положить в очередь свежий кадр (если очередь занята — выбросить старый).
             try:
+                if homography_check:
+                    frame = frames.get_webcam_warped_to_projector()
                 frame_queue.put_nowait((frame_timestamp_ms, frame))
             except queue.Full:
                 try:
@@ -241,6 +244,10 @@ def start() -> None:
                                 homography_check = True
                         else:
                             print("Homography не оценена:", info)
+                if key in (ord("d"), ord("D")):
+                    frames.set_homography_cam_to_proj(None)
+                    homography_check = False
+                    print("Homography сброшено")
                 
         
     finally:

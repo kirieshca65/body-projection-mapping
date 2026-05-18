@@ -230,7 +230,6 @@ class FrameStorage:
 
         H_cam_to_proj: камера → проектор; в warpPerspective — inv(H).
         """
-        M = np.linalg.inv(H_cam_to_proj)
         w, h = proj_wh
         return cv2.warpPerspective(
             camera_bgr,
@@ -249,12 +248,12 @@ class FrameStorage:
         """
         with self._rwlock.read_lock():
             if (
-                self.mapping_frame is None
+                self.webcam_frame is None
                 or self.homography_cam_to_proj is None
                 or self.mapping_res is None
             ):
                 return None
-            frame = self.mapping_frame.copy()
+            frame = self.webcam_frame.copy()
             H = self.homography_cam_to_proj.copy()
             proj_wh = self.mapping_res
 
