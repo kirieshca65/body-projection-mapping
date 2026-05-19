@@ -48,7 +48,7 @@ class _ExpSmoother2D:
         return out
 
 
-_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.7)
+_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.6)
 
 
 def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_masks: Optional[np.ndarray] = None) -> None:

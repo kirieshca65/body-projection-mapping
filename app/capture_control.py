@@ -3,6 +3,7 @@ import threading
 import queue
 import sys
 import cv2
+import numpy as np
 from cv2_enumerate_cameras import enumerate_cameras
 
 from screeninfo import get_monitors
@@ -33,6 +34,61 @@ except ImportError:
         start_overlay_worker,
         stop_overlay_worker,
     )
+
+def _ui_monitor(screens, projector_monitor):
+    """Монитор для окон управления (не проектор, если возможно)."""
+    if not screens:
+        return None
+    for monitor in screens:
+        if getattr(monitor, "is_primary", False):
+            if projector_monitor is None or (
+                monitor.x,
+                monitor.y,
+            ) != (projector_monitor.x, projector_monitor.y):
+                return monitor
+    if projector_monitor is not None:
+        for monitor in screens:
+            if (monitor.x, monitor.y) != (projector_monitor.x, projector_monitor.y):
+                return monitor
+    return screens[0]
+
+
+def init_windows(projector_monitor=None) -> None:
+    """Создаёт окна OpenCV и раскладывает их по экранам."""
+    cv2.namedWindow("Webcam", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Pose Estimation", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Preview", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Mapping", cv2.WINDOW_NORMAL)
+
+    placeholder = np.zeros((1, 1, 3), dtype=np.uint8)
+    for name in ("Webcam", "Pose Estimation", "Preview", "Mapping"):
+        cv2.imshow(name, placeholder)
+    cv2.waitKey(1)
+
+    screens = list(get_monitors())
+    ui_monitor = _ui_monitor(screens, projector_monitor)
+    if ui_monitor is not None:
+        mx, my = ui_monitor.x, ui_monitor.y
+        mw, mh = ui_monitor.width, ui_monitor.height
+        half_w, half_h = mw // 2, mh // 2
+
+        cv2.moveWindow("Webcam", mx + half_w, my)
+        cv2.resizeWindow("Webcam", half_w, half_h)
+
+        cv2.moveWindow("Preview", mx + half_w, my + half_h)
+        cv2.resizeWindow("Preview", half_w, half_h)
+
+        cv2.moveWindow("Pose Estimation", mx, my)
+        cv2.resizeWindow("Pose Estimation", half_w, half_h)
+
+    if projector_monitor is not None:
+        cv2.moveWindow("Mapping", projector_monitor.x, projector_monitor.y)
+        cv2.setWindowProperty(
+            "Mapping",
+            cv2.WND_PROP_FULLSCREEN,
+            cv2.WINDOW_FULLSCREEN,
+        )
+
 
 def select_projector_monitor():
     """Выбор монитора для проекции: задаёт разрешение маппинга и позицию окна Preview."""
@@ -116,10 +172,7 @@ def start() -> None:
         init_landmarker()
         start_overlay_worker()
 
-        cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
-        cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
-        cv2.namedWindow('Preview', cv2.WINDOW_NORMAL)
-        cv2.namedWindow('Mapping', cv2.WINDOW_NORMAL)
+        init_windows(projector_monitor)
 
         # Кадры читаем в главном потоке, обработку (mp_track_pose + downstream) — в рабочем.
         # maxsize=1: всегда обрабатываем "самый свежий" кадр, а не накапливаем задержку.
@@ -143,7 +196,6 @@ def start() -> None:
         t = threading.Thread(target=worker, name="pose_worker", daemon=True)
         t.start()
 
-        preview_fullscreen_applied = False
         homography_check = False
         
         print(
@@ -199,34 +251,22 @@ def start() -> None:
 
             if mapping_frame is not None:
                 cv2.imshow('Mapping', mapping_frame)
-                if projector_monitor is not None and not preview_fullscreen_applied:
-                    cv2.moveWindow(
-                        'Mapping',
-                        projector_monitor.x,
-                        projector_monitor.y,
-                    )
-                    cv2.setWindowProperty(
-                        'Mapping',
-                        cv2.WND_PROP_FULLSCREEN,
-                        cv2.WINDOW_FULLSCREEN,
-                    )
-                    preview_fullscreen_applied = True
-                
+
             cv2.imshow('Webcam', frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key:
-                if key in (ord('q'), ord('Q'), ord('й'), ord('Й')):
+                if key in (ord('q'), ord('Q')):
                     if stop_event is not None:
                         stop_event.set()
                     break
                 
-                if key in (ord("c"), ord("C"), ord("с"), ord("С")):
+                if key in (ord("c"), ord("C")):
                     nxt = not frames.get_calibration_active()
                     frames.set_calibration_active(nxt)
                     print("Режим калибровки (ArUco на проекторе):", "вкл" if nxt else "выкл")
 
-                if key in (ord("h"), ord("H"), ord("р"), ord("Р")):
+                if key in (ord("h"), ord("H")):
                     if mapping_res is None:
                         print("Сначала выберите монитор / задано mapping_res.")
                     else:
@@ -247,8 +287,7 @@ def start() -> None:
                 if key in (ord("d"), ord("D")):
                     frames.set_homography_cam_to_proj(None)
                     homography_check = False
-                    print("Homography сброшено")
-                
+                    print("Homography сброшено")           
         
     finally:
         if stop_event is not None:
