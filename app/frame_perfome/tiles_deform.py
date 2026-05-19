@@ -8,9 +8,9 @@ except ImportError:
     from frame_storage import frames, tiles
 
 """Коффициент добавочного масштабирования торса"""
-size_adjust : float =  1.1
+size_adjust : float =  1.12
 """Вертикальный сдвиг torso tile вверх (доля высоты кадра)"""
-torso_y_shift : float = 0.02
+torso_y_shift : float = 0.03
 """
 - width_scale: ширина полосы как доля длины отрезка
 - extend_scale: насколько продлить отрезок за точки (доля длины)
@@ -48,40 +48,7 @@ class _ExpSmoother2D:
         return out
 
 
-_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.6)
-
-
-def _cam_dst_pts_to_projector(
-    dst_pts: np.ndarray,
-    cam_hw: tuple[int, int],
-    proj_hw: tuple[int, int],
-) -> np.ndarray:
-    """
-    Точки четырёхугольника в пикселях кадра камеры -> в пиксели буфера проектора.
-
-    Если задана homography_cam_to_proj — используем её.
-    Иначе — равномерное масштабирование по размеру кадра и фона.
-    """
-    ch, cw = cam_hw
-    ph, pw = proj_hw
-    pts = np.asarray(dst_pts, dtype=np.float64).reshape(-1, 2)
-    n = pts.shape[0]
-
-    H = frames.get_homography_cam_to_proj()
-    if H is not None:
-        H = np.asarray(H, dtype=np.float64)
-        hom = np.hstack([pts, np.ones((n, 1), dtype=np.float64)])
-        out = (H @ hom.T).T
-        w = out[:, 2:3]
-        w = np.where(np.abs(w) < 1e-9, 1e-9, w)
-        out = out[:, :2] / w
-        return out.astype(np.float32)
-
-    if pw == cw and ph == ch:
-        return pts.astype(np.float32)
-
-    scale = np.array([pw / cw, ph / ch], dtype=np.float64)
-    return (pts * scale).astype(np.float32)
+_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.1)
 
 
 def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_masks: Optional[np.ndarray] = None) -> None:
@@ -98,16 +65,12 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_mas
 
     # Пакетно собираем overlay-ы по всем маскам из одного видео-кадра.
     mask_names = [
-        "mask_forearm_l.png",
-        "mask_forearm_r.png",
-        "mask_thigh_l.png",
-        "mask_thigh_r.png",
-        "mask_torso.png",
+        "mask_torso.png"
     ]
     overlays = tiles.build_overlay_masks_batch(mask_names)
 
     
-    ov = overlays.get("mask_forearm_l.png")
+    """ov = overlays.get("mask_forearm_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (12, 14), frame, overlay_img=ov)
 
@@ -121,7 +84,7 @@ def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_mas
 
     ov = overlays.get("mask_thigh_r.png")
     if ov is not None:
-        overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)
+        overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)"""
 
     ov = overlays.get("mask_torso.png")
     if ov is not None:
@@ -152,13 +115,12 @@ def overlay_torso(
     # Извлекаем координаты 4 точек из MediaPipe (x, y в пикселях)
     # Порядок: [Левое плечо, Правое плечо, Правое бедро, Левое бедро]
     landmark = landmarks[0]
-    torso_idx = (11, 12, 24, 23)
     torso_idx = (12, 11, 23, 24)
     dst_raw = [
         np.array([landmark[i].x * fw, landmark[i].y * fh], dtype=np.float32) for i in torso_idx
     ]
     dst_pts = np.array([_POINT_SMOOTHER.update(i, p) for i, p in zip(torso_idx, dst_raw)], dtype=np.float32)
-
+    
     """Применение дополнительного увеличения"""
     global size_adjust, torso_y_shift
     center = dst_pts.mean(axis=0, keepdims=True)
@@ -322,3 +284,37 @@ def _warp_and_blend_roi(
 
     np.clip(out, 0, 255, out=out)
     roi[:, :, :3] = out.astype(np.uint8)
+
+
+
+def _cam_dst_pts_to_projector(
+    dst_pts: np.ndarray,
+    cam_hw: tuple[int, int],
+    proj_hw: tuple[int, int],
+) -> np.ndarray:
+    """
+    Точки четырёхугольника в пикселях кадра камеры -> в пиксели буфера проектора.
+
+    Если задана homography_cam_to_proj — используем её.
+    Иначе — равномерное масштабирование по размеру кадра и фона.
+    """
+    ch, cw = cam_hw
+    ph, pw = proj_hw
+    pts = np.asarray(dst_pts, dtype=np.float64).reshape(-1, 2)
+    n = pts.shape[0]
+
+    H = frames.get_homography_cam_to_proj()
+    if H is not None:
+        H = np.asarray(H, dtype=np.float64)
+        hom = np.hstack([pts, np.ones((n, 1), dtype=np.float64)])
+        out = (H @ hom.T).T
+        w = out[:, 2:3]
+        w = np.where(np.abs(w) < 1e-9, 1e-9, w)
+        out = out[:, :2] / w
+        return out.astype(np.float32)
+
+    if pw == cw and ph == ch:
+        return pts.astype(np.float32)
+
+    scale = np.array([pw / cw, ph / ch], dtype=np.float64)
+    return (pts * scale).astype(np.float32)
