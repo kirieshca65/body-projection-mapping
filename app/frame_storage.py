@@ -281,6 +281,10 @@ class TilesStorage:
     _masks_alpha_scaled: Dict[str, np.ndarray] = field(default_factory=dict)
     _masks_alpha_scaled_res: Optional[Tuple[int, int]] = None  # (vh, vw)
 
+    # bbox (y0, y1, x0, x1) и обрезанная alpha — вычисляются при масштабировании масок.
+    _masks_bbox_cache: Dict[str, Tuple[int, int, int, int]] = field(default_factory=dict)
+    _masks_alpha_crop: Dict[str, np.ndarray] = field(default_factory=dict)
+
     # mask_name -> ((vh, vw), (y0, y1, x0, x1), overlay_BGRA)
     _overlay_cache: Dict[str, Tuple[Tuple[int, int], Tuple[int, int, int, int], np.ndarray]] = field(
         default_factory=dict
@@ -342,8 +346,25 @@ class TilesStorage:
         self._video_select_attempted :bool = False
         self._masks_alpha_scaled = {}
         self._masks_alpha_scaled_res = None
+        self._masks_bbox_cache = {}
+        self._masks_alpha_crop = {}
 
         self._load_default_masks(tiles_dir)
+
+    @staticmethod
+    def _bbox_and_crop_from_alpha(
+        alpha: np.ndarray,
+    ) -> Optional[Tuple[Tuple[int, int, int, int], np.ndarray]]:
+        """bbox (y0, y1, x0, x1) и обрезанная alpha-маска."""
+        pts = cv2.findNonZero(alpha)
+        if pts is None:
+            return None
+        x, y, w, h = cv2.boundingRect(pts)
+        if w <= 0 or h <= 0:
+            return None
+        y0, y1 = y, y + h
+        x0, x1 = x, x + w
+        return (y0, y1, x0, x1), alpha[y0:y1, x0:x1]
 
     def _load_default_masks(self, tiles_dir: str) -> None:
         """
@@ -399,6 +420,8 @@ class TilesStorage:
         # При смене видео сбрасываем подготовленные маски и кеш оверлеев.
         self._masks_alpha_scaled = {}
         self._masks_alpha_scaled_res = None
+        self._masks_bbox_cache = {}
+        self._masks_alpha_crop = {}
         self._overlay_cache = {}
 
     def _scale_masks_to_video_res(self, vh: int, vw: int) -> None:
@@ -411,17 +434,25 @@ class TilesStorage:
             return
 
         scaled: Dict[str, np.ndarray] = {}
+        bbox_cache: Dict[str, Tuple[int, int, int, int]] = {}
+        crop_cache: Dict[str, np.ndarray] = {}
         for name, alpha in (self.masks_alpha or {}).items():
             if alpha is None:
                 continue
             if alpha.shape[:2] == (vh, vw):
-                scaled[name] = alpha
+                alpha_scaled = alpha
             else:
-                scaled[name] = cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
+                alpha_scaled = cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
+            scaled[name] = alpha_scaled
+            prepared = self._bbox_and_crop_from_alpha(alpha_scaled)
+            if prepared is not None:
+                bbox_cache[name], crop_cache[name] = prepared
 
         self._masks_alpha_scaled = scaled
         self._masks_alpha_scaled_res = (vh, vw)
-        # bbox/overlay зависит от размеров => сбрасываем
+        self._masks_bbox_cache = bbox_cache
+        self._masks_alpha_crop = crop_cache
+        # overlay зависит от размеров => сбрасываем
         self._overlay_cache = {}
 
     def prepare_masks_for_video(self) -> None:
@@ -499,12 +530,12 @@ class TilesStorage:
                 # не валим пайплайн, если видео не открылось
                 return
 
-    def get_video_frame(self) -> Optional[np.ndarray]:
+    def get_video_frame(self, *, copy: bool = False) -> Optional[np.ndarray]:
         if self._video_reader is None:
             self.ensure_video_selected()
         if self._video_reader is None:
             return None
-        return self._video_reader.get_latest_frame()
+        return self._video_reader.get_latest_frame(copy=copy)
 
     def build_overlay_mask(self, mask_name: str) -> Optional[np.ndarray]:
         """
@@ -530,13 +561,15 @@ class TilesStorage:
 
         Главная цель: использовать один и тот же кадр видео для всех масок
         (синхронность по времени + меньше накладных расходов на get_video_frame()).
+
+        video_bgr без copy=True — ссылка на буфер ридера; не хранить между кадрами.
         Возвращает словарь mask_name -> BGRA overlay только для успешно собранных масок.
         """
         if not mask_names:
             return {}
 
         if video_bgr is None:
-            video_bgr = self.get_video_frame()
+            video_bgr = self.get_video_frame(copy=False)
         if video_bgr is None:
             return {}
 
@@ -548,26 +581,32 @@ class TilesStorage:
             if alpha is None:
                 continue
 
-            # Маска должна быть в разрешении видео: предпочитаем заранее подготовленную.
-            alpha_scaled = None
+            bbox: Optional[Tuple[int, int, int, int]] = None
+            alpha_crop: Optional[np.ndarray] = None
+
             if self._masks_alpha_scaled_res == (vh, vw):
-                alpha_scaled = self._masks_alpha_scaled.get(mask_name)
-            if alpha_scaled is None:
-                # Фоллбэк: если prepare_masks_for_video() не сработал — масштабируем на лету.
-                alpha_scaled = (
-                    alpha
-                    if alpha.shape[:2] == (vh, vw)
-                    else cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
-                )
+                bbox = self._masks_bbox_cache.get(mask_name)
+                alpha_crop = self._masks_alpha_crop.get(mask_name)
 
-            # Находим bbox ненулевой альфы.
-            ys, xs = np.where(alpha_scaled > 0)
-            if ys.size == 0 or xs.size == 0:
-                continue
-            y0, y1 = int(ys.min()), int(ys.max()) + 1
-            x0, x1 = int(xs.min()), int(xs.max()) + 1
+            if bbox is None or alpha_crop is None:
+                alpha_scaled = None
+                if self._masks_alpha_scaled_res == (vh, vw):
+                    alpha_scaled = self._masks_alpha_scaled.get(mask_name)
+                if alpha_scaled is None:
+                    alpha_scaled = (
+                        alpha
+                        if alpha.shape[:2] == (vh, vw)
+                        else cv2.resize(alpha, (vw, vh), interpolation=cv2.INTER_NEAREST)
+                    )
+                prepared = self._bbox_and_crop_from_alpha(alpha_scaled)
+                if prepared is None:
+                    continue
+                bbox, alpha_crop = prepared
+                if self._masks_alpha_scaled_res == (vh, vw):
+                    self._masks_bbox_cache[mask_name] = bbox
+                    self._masks_alpha_crop[mask_name] = alpha_crop
 
-            alpha_crop = alpha_scaled[y0:y1, x0:x1]
+            y0, y1, x0, x1 = bbox
             key = mask_name
             cached = self._overlay_cache.get(key)
             if cached is not None and cached[0] == (vh, vw) and cached[1] == (y0, y1, x0, x1):

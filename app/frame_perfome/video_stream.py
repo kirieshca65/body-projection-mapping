@@ -16,7 +16,8 @@ class BufferedVideoReader:
 
     - читает в отдельном daemon-thread
     - при окончании видео делает loop (перемотка на 0)
-    - get_latest_frame() возвращает копию BGR кадра или None
+    - get_latest_frame(copy=False) возвращает ссылку на кадр без копии (double-buffer)
+    - get_latest_frame(copy=True) — явная копия, если кадр нужно хранить дольше одного тика
     """
 
     path: str
@@ -26,7 +27,8 @@ class BufferedVideoReader:
     def __post_init__(self) -> None:
         self._cap: Optional[cv2.VideoCapture] = None
         self._lock = threading.Lock()
-        self._latest: Optional[np.ndarray] = None
+        self._frames: list[Optional[np.ndarray]] = [None, None]
+        self._read_idx: int = 0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -53,13 +55,15 @@ class BufferedVideoReader:
                 except Exception:
                     pass
                 self._cap = None
-            self._latest = None
+            self._frames = [None, None]
+            self._read_idx = 0
 
-    def get_latest_frame(self) -> Optional[np.ndarray]:
+    def get_latest_frame(self, *, copy: bool = False) -> Optional[np.ndarray]:
         with self._lock:
-            if self._latest is None:
+            frame = self._frames[self._read_idx]
+            if frame is None:
                 return None
-            return self._latest.copy()
+            return frame.copy() if copy else frame
 
     def _run(self) -> None:
         min_dt = 1.0 / max(1.0, float(self.target_fps))
@@ -82,7 +86,9 @@ class BufferedVideoReader:
                 continue
 
             with self._lock:
-                self._latest = frame
+                write_idx = 1 - self._read_idx
+                self._frames[write_idx] = frame
+                self._read_idx = write_idx
 
             now = time.time()
             dt = now - last_ts
