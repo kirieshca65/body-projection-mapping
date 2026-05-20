@@ -61,23 +61,23 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
     """latest_pose_frame импортируется из capture_control для дальнейшего вывода"""
     global latest_pose_frame
     
-    try:
+    """try:
         segmentation_masks = result.segmentation_masks[0].numpy_view()
     except Exception:
-        segmentation_masks = None
+        segmentation_masks = None"""
 
-    try:    
-        result = result.pose_landmarks
-        if result[0] is None:
+    try:
+        pose_landmarks = result.pose_landmarks
+        world_landmarks = result.pose_world_landmarks
+        if pose_landmarks[0] is None:
             raise
     except Exception:
         return
-
     """if segmentation_masks is not None:
         segmentation_masks = segmentation_masks.astype(np.uint8) * 255
         segmentation_masks = cv2.cvtColor(segmentation_masks, cv2.COLOR_GRAY2BGR)"""
 
-    if result is None:
+    if pose_landmarks is None:
         return
     frame_rgb = output_image.numpy_view().copy()
     #print('pose landmarker result: {}'.format(result))
@@ -86,7 +86,7 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
     q = _overlay_queue
     if q is not None:
         #frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        payload = (timestamp_ms, result, frames.get_webcam(), segmentation_masks)
+        payload = (timestamp_ms, (pose_landmarks, world_landmarks), frames.get_webcam())
         try:
             q.put_nowait(payload)
         except queue.Full:
@@ -100,7 +100,7 @@ def result_handler(result: PoseLandmarkerResult, output_image: mp.Image, timesta
             except queue.Full:
                 pass
 
-    landmark_print(result, frame_rgb, timestamp_ms)
+    landmark_print(pose_landmarks, frame_rgb, timestamp_ms)
 
     
 def landmark_print(landmarks, frame, timestamp: int):
@@ -171,11 +171,11 @@ def start_overlay_worker() -> None:
         assert _overlay_queue is not None
         while not _overlay_stop.is_set():
             try:
-                _ts, lm, frame_bgr, seg = _overlay_queue.get(timeout=0.05)
+                _ts, lm, frame_bgr = _overlay_queue.get(timeout=0.05)
             except queue.Empty:
                 continue
             try:
-                draw_overlay(lm, frame_bgr, seg)
+                draw_overlay(lm, frame_bgr)
             finally:
                 _overlay_queue.task_done()
 

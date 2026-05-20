@@ -74,8 +74,6 @@ class FrameStorage:
     mapping_frame: Optional[np.ndarray] = None     # Конечный кадр для вывода на проектор
     homography_cam_to_proj: Optional[np.ndarray] = None  # 3x3: камера -> проектор (прямоугольник экрана)
     calibration_active: bool = False
-    homography_cam_to_proj: Optional[np.ndarray] = None  # 3x3: камера -> проектор (прямоугольник экрана)
-    calibration_active: bool = False
 
     _rwlock: RWLock = field(default_factory=RWLock, init=False, repr=False)
 
@@ -176,27 +174,6 @@ class FrameStorage:
     def get_webcam_res(self):
         with self._rwlock.read_lock():
             return self.webcam_res
-
-    def set_homography_cam_to_proj(self, H: Optional[np.ndarray]) -> None:
-        with self._rwlock.write_lock():
-            if H is None:
-                self.homography_cam_to_proj = None
-            else:
-                self.homography_cam_to_proj = np.asarray(H, dtype=np.float64).copy()
-
-    def get_homography_cam_to_proj(self) -> Optional[np.ndarray]:
-        with self._rwlock.read_lock():
-            if self.homography_cam_to_proj is None:
-                return None
-            return self.homography_cam_to_proj.copy()
-
-    def set_calibration_active(self, active: bool) -> None:
-        with self._rwlock.write_lock():
-            self.calibration_active = bool(active)
-
-    def get_calibration_active(self) -> bool:
-        with self._rwlock.read_lock():
-            return self.calibration_active
 
     def set_homography_cam_to_proj(self, H: Optional[np.ndarray]) -> None:
         with self._rwlock.write_lock():
