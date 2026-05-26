@@ -488,6 +488,7 @@ class TilesStorage:
                 filetypes=[
                     ("Video files", "*.mp4;*.mov;*.mkv;*.avi;*.webm"),
                     ("All files", "*.*"),
+                    ("Images", "*.png"),
                 ],
             )
             print(path)

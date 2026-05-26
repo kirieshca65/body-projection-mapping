@@ -10,6 +10,7 @@ from screeninfo import get_monitors
 
 try:
     from .frame_storage import frames, tiles
+    from .frame_perfome import tiles_deform
     from .projector_control import (
         build_calibration_image,
         estimate_homography_cam_to_proj,
@@ -23,6 +24,7 @@ try:
     )
 except ImportError:
     from frame_storage import frames, tiles
+    from frame_perfome import tiles_deform
     from projector_control import (
         build_calibration_image,
         estimate_homography_cam_to_proj,
@@ -34,6 +36,73 @@ except ImportError:
         start_overlay_worker,
         stop_overlay_worker,
     )
+
+DEPTH_CONTROLS_WINDOW = "Depth Controls"
+
+
+def _create_depth_controls_window() -> None:
+    cv2.namedWindow(DEPTH_CONTROLS_WINDOW, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(DEPTH_CONTROLS_WINDOW, 420, 220)
+
+    trackbar_names = (
+        "wall_m x100",
+        "z_ref +200",
+        "scale_min x100",
+        "scale_max x100",
+    )
+
+    def _get_trackbar(name: str) -> int | None:
+        try:
+            return cv2.getTrackbarPos(name, DEPTH_CONTROLS_WINDOW)
+        except cv2.error:
+            return None
+
+    def _sync(_: int = 0) -> None:
+        values = {name: _get_trackbar(name) for name in trackbar_names}
+        if any(value is None for value in values.values()):
+            return
+
+        wall = values["wall_m x100"] / 100.0
+        z_ref = (values["z_ref +200"] - 200) / 100.0
+        scale_min = values["scale_min x100"] / 100.0
+        scale_max = values["scale_max x100"] / 100.0
+        tiles_deform.set_distance_compensation(
+            wall_distance_m=wall,
+            z_reference_m=z_ref,
+            scale_min=scale_min,
+            scale_max=scale_max,
+        )
+
+    cv2.createTrackbar(
+        "wall_m x100",
+        DEPTH_CONTROLS_WINDOW,
+        int(round(tiles_deform.projector_wall_distance_m * 100)),
+        800,
+        _sync,
+    )
+    cv2.createTrackbar(
+        "z_ref +200",
+        DEPTH_CONTROLS_WINDOW,
+        int(round(tiles_deform.world_z_reference_m * 100)) + 200,
+        400,
+        _sync,
+    )
+    cv2.createTrackbar(
+        "scale_min x100",
+        DEPTH_CONTROLS_WINDOW,
+        int(round(tiles_deform.distance_scale_min * 100)),
+        250,
+        _sync,
+    )
+    cv2.createTrackbar(
+        "scale_max x100",
+        DEPTH_CONTROLS_WINDOW,
+        int(round(tiles_deform.distance_scale_max * 100)),
+        250,
+        _sync,
+    )
+    _sync()
+
 
 def _ui_monitor(screens, projector_monitor):
     """Монитор для окон управления (не проектор, если возможно)."""
@@ -59,6 +128,7 @@ def init_windows(projector_monitor=None) -> None:
     cv2.namedWindow("Pose Estimation", cv2.WINDOW_NORMAL)
     cv2.namedWindow("Preview", cv2.WINDOW_NORMAL)
     cv2.namedWindow("Mapping", cv2.WINDOW_NORMAL)
+    _create_depth_controls_window()
 
     placeholder = np.zeros((1, 1, 3), dtype=np.uint8)
     for name in ("Webcam", "Pose Estimation", "Preview", "Mapping"):
@@ -80,6 +150,8 @@ def init_windows(projector_monitor=None) -> None:
 
         cv2.moveWindow("Pose Estimation", mx, my)
         cv2.resizeWindow("Pose Estimation", half_w, half_h)
+
+        cv2.moveWindow(DEPTH_CONTROLS_WINDOW, mx, my + half_h)
 
     if projector_monitor is not None:
         cv2.moveWindow("Mapping", projector_monitor.x, projector_monitor.y)

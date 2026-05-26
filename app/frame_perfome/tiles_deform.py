@@ -32,6 +32,25 @@ distance_scale_max: float = 1.1
 
 background : np.ndarray = None
 
+
+def set_distance_compensation(
+    wall_distance_m: float,
+    z_reference_m: float,
+    scale_min: float,
+    scale_max: float,
+) -> None:
+    global projector_wall_distance_m
+    global world_z_reference_m
+    global distance_scale_min
+    global distance_scale_max
+
+    projector_wall_distance_m = max(0.05, float(wall_distance_m))
+    world_z_reference_m = float(z_reference_m)
+    lo = max(0.05, float(scale_min))
+    hi = max(0.05, float(scale_max))
+    distance_scale_min = min(lo, hi)
+    distance_scale_max = max(lo, hi)
+
 class _ExpSmoother2D:
     """
     Экспоненциальное сглаживание (EMA) для 2D-точек.
