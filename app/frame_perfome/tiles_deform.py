@@ -2,17 +2,54 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from frame_storage import frames, tiles
+try:
+    from ..frame_storage import frames, tiles
+except ImportError:
+    from frame_storage import frames, tiles
 
-
-size_adjust : float =  1.3
+"""Коффициент добавочного масштабирования торса"""
+size_adjust : float =  1.1
+"""Вертикальный сдвиг torso tile вверх (доля высоты кадра)"""
+torso_y_shift : float = 0.02
 """
 - width_scale: ширина полосы как доля длины отрезка
 - extend_scale: насколько продлить отрезок за точки (доля длины)
 """
-width_scale : float = 0.35
-extend_scale : float = 0.10
+width_scale : float = 0.25
+extend_scale : float = 0.08
+"""
+Distance compensation for projector rays.
 
+MediaPipe WorldLandmarks.z is in meters around the body center. Negative z is
+usually closer to the camera/projector, so the projected shape must become
+larger on the wall to keep the same size on the person.
+"""
+projector_wall_distance_m: float = 2.5
+world_z_reference_m: float = 0
+world_z_direction: float = -1.0
+distance_scale_min: float = 0.65
+distance_scale_max: float = 1.1
+
+background : np.ndarray = None
+
+
+def set_distance_compensation(
+    wall_distance_m: float,
+    z_reference_m: float,
+    scale_min: float,
+    scale_max: float,
+) -> None:
+    global projector_wall_distance_m
+    global world_z_reference_m
+    global distance_scale_min
+    global distance_scale_max
+
+    projector_wall_distance_m = max(0.05, float(wall_distance_m))
+    world_z_reference_m = float(z_reference_m)
+    lo = max(0.05, float(scale_min))
+    hi = max(0.05, float(scale_max))
+    distance_scale_min = min(lo, hi)
+    distance_scale_max = max(lo, hi)
 
 class _ExpSmoother2D:
     """
@@ -45,37 +82,127 @@ class _ExpSmoother2D:
 _POINT_SMOOTHER = _ExpSmoother2D(alpha=0.6)
 
 
-def draw_overlay(landmarks, frame: Optional[np.ndarray] = None) -> None:
+class _ExpSmoother1D:
+    def __init__(self, alpha: float = 0.45):
+        self.alpha = float(alpha)
+        self._state: dict[int, float] = {}
+
+    def reset(self) -> None:
+        self._state.clear()
+
+    def update(self, key: int, value: float) -> float:
+        v = float(value)
+        prev = self._state.get(int(key))
+        if prev is None:
+            out = v
+        else:
+            a = self.alpha
+            out = (a * v) + ((1.0 - a) * prev)
+        self._state[int(key)] = out
+        return out
+
+
+_DEPTH_SCALE_SMOOTHER = _ExpSmoother1D(alpha=0.6)
+
+
+def _split_landmark_sets(landmarks):
+    if isinstance(landmarks, tuple) and len(landmarks) == 2:
+        return landmarks
+    return landmarks, None
+
+
+def _world_landmark_for_pose(world_landmarks, pose_index: int = 0):
+    if world_landmarks is None:
+        return None
+    try:
+        return world_landmarks[pose_index]
+    except (IndexError, TypeError):
+        return None
+
+
+def _pose_landmark_for_pose(pose_landmarks, pose_index: int = 0):
+    if pose_landmarks is None:
+        return None
+    try:
+        return pose_landmarks[pose_index]
+    except (IndexError, TypeError):
+        return None
+
+
+def _projector_depth_scale(world_landmark, indices: tuple[int, ...], smooth_key: int) -> float:
+    if world_landmark is None:
+        return 1.0
+
+    zs: list[float] = []
+    for i in indices:
+        try:
+            z = float(world_landmark[i].z)
+        except (IndexError, TypeError, ValueError, AttributeError):
+            continue
+        if np.isfinite(z):
+            zs.append(z)
+
+    if not zs:
+        return 1.0
+
+    mean_z = float(np.median(np.asarray(zs, dtype=np.float32)))
+    z_offset = (mean_z - float(world_z_reference_m)) * float(world_z_direction)
+    wall_distance = max(0.05, float(projector_wall_distance_m))
+    person_distance = max(0.05, wall_distance - z_offset)
+    scale = wall_distance / person_distance
+    scale = float(np.clip(scale, float(distance_scale_min), float(distance_scale_max)))
+    return _DEPTH_SCALE_SMOOTHER.update(smooth_key, scale)
+
+
+def _scale_from_projector_center(dst_pts: np.ndarray, frame_hw: tuple[int, int], scale: float) -> np.ndarray:
+    if abs(float(scale) - 1.0) < 1e-4:
+        return dst_pts
+    fh, fw = frame_hw
+    anchor = np.array([[fw * 0.5, fh * 0.5]], dtype=np.float32)
+    return ((dst_pts - anchor) * float(scale) + anchor).astype(np.float32)
+
+
+def draw_overlay(landmarks, frame: Optional[np.ndarray] = None, segmentation_masks: Optional[np.ndarray] = None) -> None:
     """
     Рисует overlay на кадре, синхронном с landmarks.
 
     Если `frame` не передан — берём кадр из `frames.get_webcam()` (fallback).
     Для устранения рассинхрона предпочтительно всегда передавать кадр явно.
     """
-    if frame is None or landmarks is None:
+    global background
+    background = frames.get_proj_back()
+    if landmarks is None or frame is None or background is None:
         return
-    
-    # Конечности: берём текущий кадр видео + фиксированную маску (BGRA)
-    ov = tiles.build_overlay_mask("mask_forearm_r.png")
-    if ov is not None:
-        overlay_limbs(landmarks, (11, 13), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_forearm_l.png")
+    # Пакетно собираем overlay-ы по всем маскам из одного видео-кадра.
+    mask_names = [
+        "mask_torso.png"
+    ]
+    overlays = tiles.build_overlay_masks_batch(mask_names)
+
+    
+    """ov = overlays.get("mask_forearm_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (12, 14), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_thigh_r.png")
+    ov = overlays.get("mask_forearm_r.png")
     if ov is not None:
-        overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)
+        overlay_limbs(landmarks, (11, 13), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_thigh_l.png")
+    ov = overlays.get("mask_thigh_l.png")
     if ov is not None:
         overlay_limbs(landmarks, (24, 26), frame, overlay_img=ov)
 
-    ov = tiles.build_overlay_mask("mask_torso.png")
+    ov = overlays.get("mask_thigh_r.png")
     if ov is not None:
-        overlay_torso(landmarks, frame, overlay_img=ov)
-    frames.set_preview(frame)
+        overlay_limbs(landmarks, (23, 25), frame, overlay_img=ov)"""
+
+    ov = overlays.get("mask_torso.png")
+    if ov is not None:
+        overlay_torso(landmarks, background, overlay_img=ov)
+    
+    frames.set_preview(background)
+    frames.set_mapping(background)
 
 
 def overlay_torso(
@@ -90,30 +217,40 @@ def overlay_torso(
     if overlay_img is None:
         overlay_img = tiles.get_torso()
 
-    if landmarks[0] is None or frame is None or overlay_img is None:
+    pose_landmarks, world_landmarks = _split_landmark_sets(landmarks)
+    landmark = _pose_landmark_for_pose(pose_landmarks)
+    if landmark is None or frame is None or overlay_img is None:
         return
-
-    fh, fw = frame.shape[:2]
+    #print(world_landmarks[0][12].z)
+    global background
+    fh, fw = background.shape[:2]
 
     # Извлекаем координаты 4 точек из MediaPipe (x, y в пикселях)
     # Порядок: [Левое плечо, Правое плечо, Правое бедро, Левое бедро]
-    landmark = landmarks[0]
-    torso_idx = (11, 12, 24, 23)
+    world_landmark = _world_landmark_for_pose(world_landmarks)
+    torso_idx = (12, 11, 23, 24)
     dst_raw = [
         np.array([landmark[i].x * fw, landmark[i].y * fh], dtype=np.float32) for i in torso_idx
     ]
     dst_pts = np.array([_POINT_SMOOTHER.update(i, p) for i, p in zip(torso_idx, dst_raw)], dtype=np.float32)
-
+    
     """Применение дополнительного увеличения"""
-    global size_adjust
+    global size_adjust, torso_y_shift
     center = dst_pts.mean(axis=0, keepdims=True)
     dst_pts = (dst_pts - center) * size_adjust + center
+    dst_pts[:, 1] -= fh * float(torso_y_shift)
+    depth_scale = _projector_depth_scale(world_landmark, torso_idx, smooth_key=100)
+    dst_pts = _scale_from_projector_center(dst_pts, (fh, fw), depth_scale)
 
 
     # быстрый варп+альфа только по ROI
-    _warp_and_blend_roi(frame, overlay_img, dst_pts)
-
+    
+    #dst_bg = _cam_dst_pts_to_projector(dst_pts, (fh, fw), background.shape[:2])
+    _warp_and_blend_roi(background, overlay_img, dst_pts)
+    #_warp_and_blend_roi(frame, overlay_img, dst_pts)
+    
     return
+
 
 def overlay_limbs(
     landmarks,
@@ -129,12 +266,17 @@ def overlay_limbs(
     global width_scale, extend_scale
     if overlay_img is None:
         overlay_img = tiles.get_torso()
+        
+    overlay_img = cv2.rotate(overlay_img, cv2.ROTATE_90_CLOCKWISE)
 
-    if landmarks[0] is None or frame is None or overlay_img is None:
+    pose_landmarks, world_landmarks = _split_landmark_sets(landmarks)
+    landmark = _pose_landmark_for_pose(pose_landmarks)
+    if landmark is None or frame is None or overlay_img is None:
         return
 
-    fh, fw = frame.shape[:2]
-    landmark = landmarks[0]
+    global background
+    fh, fw = background.shape[:2]
+    world_landmark = _world_landmark_for_pose(world_landmarks)
     p1_raw = np.array([landmark[limbs[0]].x * fw, landmark[limbs[0]].y * fh], dtype=np.float32)
     p2_raw = np.array([landmark[limbs[1]].x * fw, landmark[limbs[1]].y * fh], dtype=np.float32)
     p1 = _POINT_SMOOTHER.update(int(limbs[0]), p1_raw)
@@ -158,18 +300,24 @@ def overlay_limbs(
     # Четыре угла прямоугольника вокруг отрезка
     dst_pts = np.array(
         [
-            p1e + perp * half_width,
             p2e + perp * half_width,
-            p2e - perp * half_width,
+            p1e + perp * half_width,
             p1e - perp * half_width,
+            p2e - perp * half_width,
         ],
         dtype="float32",
     )
-
-
+    
+    global torso_y_shift
+    dst_pts[:, 1] -= fh * float(torso_y_shift)
+    depth_scale = _projector_depth_scale(world_landmark, (int(limbs[0]), int(limbs[1])), smooth_key=200 + int(limbs[0]))
+    dst_pts = _scale_from_projector_center(dst_pts, (fh, fw), depth_scale)
     # быстрый варп+альфа только по ROI
-    _warp_and_blend_roi(frame, overlay_img, dst_pts)
 
+    #dst_bg = _cam_dst_pts_to_projector(dst_pts, (fh, fw), background.shape[:2])
+    _warp_and_blend_roi(background, overlay_img, dst_pts)
+    #_warp_and_blend_roi(frame, overlay_img, dst_pts)
+    
     return
 
 
@@ -248,8 +396,44 @@ def _warp_and_blend_roi(
         warped_rgb = warped[:, :, :3].astype(np.float32)
 
     # Векторное смешивание (in-place запись обратно в roi)
-    roi_f = roi.astype(np.float32)
-    out = warped_rgb * alpha3 + roi_f * (1.0 - alpha3)
+    if roi.ndim != 3 or roi.shape[2] < 3:
+        return
+    roi_rgb_f = roi[:, :, :3].astype(np.float32)
+    out = warped_rgb * alpha3 + roi_rgb_f * (1.0 - alpha3)
+
     np.clip(out, 0, 255, out=out)
-    roi[:] = out.astype(np.uint8)
-    
+    roi[:, :, :3] = out.astype(np.uint8)
+
+
+
+def _cam_dst_pts_to_projector(
+    dst_pts: np.ndarray,
+    cam_hw: tuple[int, int],
+    proj_hw: tuple[int, int],
+) -> np.ndarray:
+    """
+    Точки четырёхугольника в пикселях кадра камеры -> в пиксели буфера проектора.
+
+    Если задана homography_cam_to_proj — используем её.
+    Иначе — равномерное масштабирование по размеру кадра и фона.
+    """
+    ch, cw = cam_hw
+    ph, pw = proj_hw
+    pts = np.asarray(dst_pts, dtype=np.float64).reshape(-1, 2)
+    n = pts.shape[0]
+
+    H = frames.get_homography_cam_to_proj()
+    if H is not None:
+        H = np.asarray(H, dtype=np.float64)
+        hom = np.hstack([pts, np.ones((n, 1), dtype=np.float64)])
+        out = (H @ hom.T).T
+        w = out[:, 2:3]
+        w = np.where(np.abs(w) < 1e-9, 1e-9, w)
+        out = out[:, :2] / w
+        return out.astype(np.float32)
+
+    if pw == cw and ph == ch:
+        return pts.astype(np.float32)
+
+    scale = np.array([pw / cw, ph / ch], dtype=np.float64)
+    return (pts * scale).astype(np.float32)

@@ -3,31 +3,187 @@ import threading
 import queue
 import sys
 import cv2
+import numpy as np
 from cv2_enumerate_cameras import enumerate_cameras
+
 from screeninfo import get_monitors
 
-from frame_storage import frames, tiles
-from pose_estimation import (
-    mp_track_pose,
-    init_landmarker,
-    close_landmarker,
-    start_overlay_worker,
-    stop_overlay_worker,
-)
+try:
+    from .frame_storage import frames, tiles
+    from .frame_perfome import tiles_deform
+    from .projector_control import (
+        build_calibration_image,
+        estimate_homography_cam_to_proj,
+    )
+    from .pose_estimation import (
+        mp_track_pose,
+        init_landmarker,
+        close_landmarker,
+        start_overlay_worker,
+        stop_overlay_worker,
+    )
+except ImportError:
+    from frame_storage import frames, tiles
+    from frame_perfome import tiles_deform
+    from projector_control import (
+        build_calibration_image,
+        estimate_homography_cam_to_proj,
+    )
+    from pose_estimation import (
+        mp_track_pose,
+        init_landmarker,
+        close_landmarker,
+        start_overlay_worker,
+        stop_overlay_worker,
+    )
 
-def get_screens():
-    screens = get_monitors()
+DEPTH_CONTROLS_WINDOW = "Depth Controls"
+
+
+def _create_depth_controls_window() -> None:
+    cv2.namedWindow(DEPTH_CONTROLS_WINDOW, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(DEPTH_CONTROLS_WINDOW, 420, 220)
+
+    trackbar_names = (
+        "wall_m x100",
+        "z_ref +200",
+        "scale_min x100",
+        "scale_max x100",
+    )
+
+    def _get_trackbar(name: str) -> int | None:
+        try:
+            return cv2.getTrackbarPos(name, DEPTH_CONTROLS_WINDOW)
+        except cv2.error:
+            return None
+
+    def _sync(_: int = 0) -> None:
+        values = {name: _get_trackbar(name) for name in trackbar_names}
+        if any(value is None for value in values.values()):
+            return
+
+        wall = values["wall_m x100"] / 100.0
+        z_ref = (values["z_ref +200"] - 200) / 100.0
+        scale_min = values["scale_min x100"] / 100.0
+        scale_max = values["scale_max x100"] / 100.0
+        tiles_deform.set_distance_compensation(
+            wall_distance_m=wall,
+            z_reference_m=z_ref,
+            scale_min=scale_min,
+            scale_max=scale_max,
+        )
+
+    cv2.createTrackbar(
+        "wall_m x100",
+        DEPTH_CONTROLS_WINDOW,
+        int(round(tiles_deform.projector_wall_distance_m * 100)),
+        800,
+        _sync,
+    )
+    cv2.createTrackbar(
+        "z_ref +200",
+        DEPTH_CONTROLS_WINDOW,
+        int(round(tiles_deform.world_z_reference_m * 100)) + 200,
+        400,
+        _sync,
+    )
+    cv2.createTrackbar(
+        "scale_min x100",
+        DEPTH_CONTROLS_WINDOW,
+        int(round(tiles_deform.distance_scale_min * 100)),
+        250,
+        _sync,
+    )
+    cv2.createTrackbar(
+        "scale_max x100",
+        DEPTH_CONTROLS_WINDOW,
+        int(round(tiles_deform.distance_scale_max * 100)),
+        250,
+        _sync,
+    )
+    _sync()
+
+
+def _ui_monitor(screens, projector_monitor):
+    """Монитор для окон управления (не проектор, если возможно)."""
+    if not screens:
+        return None
     for monitor in screens:
-        print(monitor)
+        if getattr(monitor, "is_primary", False):
+            if projector_monitor is None or (
+                monitor.x,
+                monitor.y,
+            ) != (projector_monitor.x, projector_monitor.y):
+                return monitor
+    if projector_monitor is not None:
+        for monitor in screens:
+            if (monitor.x, monitor.y) != (projector_monitor.x, projector_monitor.y):
+                return monitor
+    return screens[0]
 
-    index = int(input("Enter the index of the monitor: "))
-    monitor = screens[index]
-    frames.set_mapping_res(monitor.width, monitor.height)
+
+def init_windows(projector_monitor=None) -> None:
+    """Создаёт окна OpenCV и раскладывает их по экранам."""
+    cv2.namedWindow("Webcam", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Pose Estimation", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Preview", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Mapping", cv2.WINDOW_NORMAL)
+    _create_depth_controls_window()
+
+    placeholder = np.zeros((1, 1, 3), dtype=np.uint8)
+    for name in ("Webcam", "Pose Estimation", "Preview", "Mapping"):
+        cv2.imshow(name, placeholder)
+    cv2.waitKey(1)
+
+    screens = list(get_monitors())
+    ui_monitor = _ui_monitor(screens, projector_monitor)
+    if ui_monitor is not None:
+        mx, my = ui_monitor.x, ui_monitor.y
+        mw, mh = ui_monitor.width, ui_monitor.height
+        half_w, half_h = mw // 2, mh // 2
+
+        cv2.moveWindow("Webcam", mx + half_w, my)
+        cv2.resizeWindow("Webcam", half_w, half_h)
+
+        cv2.moveWindow("Preview", mx + half_w, my + half_h)
+        cv2.resizeWindow("Preview", half_w, half_h)
+
+        cv2.moveWindow("Pose Estimation", mx, my)
+        cv2.resizeWindow("Pose Estimation", half_w, half_h)
+
+        cv2.moveWindow(DEPTH_CONTROLS_WINDOW, mx, my + half_h)
+
+    if projector_monitor is not None:
+        cv2.moveWindow("Mapping", projector_monitor.x, projector_monitor.y)
+        cv2.setWindowProperty(
+            "Mapping",
+            cv2.WND_PROP_FULLSCREEN,
+            cv2.WINDOW_FULLSCREEN,
+        )
+
+
+def select_projector_monitor():
+    """Выбор монитора для проекции: задаёт разрешение маппинга и позицию окна Preview."""
+    screens = list(get_monitors())
+    if not screens:
+        print("Мониторы не найдены (screeninfo); Preview останется обычным окном.")
+        return None
+    for i, monitor in enumerate(screens):
+        print(f"{i}: {monitor}")
+    while True:
+        try:
+            index = int(input("Индекс монитора-проектора: ").strip())
+        except ValueError:
+            continue
+        if 0 <= index < len(screens):
+            monitor = screens[index]
+            frames.set_mapping_res(monitor.width, monitor.height)
+            return monitor
 
 
 
 def _preferred_capture_backends() -> list[int]:
-    # Подбираем бэкенды под ОС, чтобы работало на Windows/macOS.
+    """Подбираем бэкенды под ОС, чтобы работало на Windows/macOS."""
     if sys.platform.startswith("win"):
         return [cv2.CAP_DSHOW, cv2.CAP_MSMF]
     if sys.platform == "darwin":
@@ -61,6 +217,8 @@ def get_camera() -> cv2.VideoCapture:
             continue
         backend = cameras[index].backend
         cap = cv2.VideoCapture(cameras[index].index, backend)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1980)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         if not cap.isOpened():
             print(f"Unable to open webcam with index {index}.")
             continue
@@ -69,13 +227,13 @@ def get_camera() -> cv2.VideoCapture:
             if ok and frame is not None:
                 height, width = frame.shape[:2]
                 frames.set_webcam_res(width, height)
-            #print(frames.get_webcam_res())
+            print(frames.get_webcam_res())
             return cap
 
-
+   
 def start() -> None:
-    
     cap = get_camera()
+    projector_monitor = select_projector_monitor()
     stop_event: threading.Event | None = None
     t: threading.Thread | None = None
     frame_queue: "queue.Queue[tuple[int, any]]" | None = None
@@ -86,9 +244,7 @@ def start() -> None:
         init_landmarker()
         start_overlay_worker()
 
-        cv2.namedWindow('Webcam', cv2.WINDOW_NORMAL)
-        cv2.namedWindow('Pose Estimation', cv2.WINDOW_NORMAL)
-        cv2.namedWindow('Preview', cv2.WINDOW_NORMAL)
+        init_windows(projector_monitor)
 
         # Кадры читаем в главном потоке, обработку (mp_track_pose + downstream) — в рабочем.
         # maxsize=1: всегда обрабатываем "самый свежий" кадр, а не накапливаем задержку.
@@ -111,17 +267,29 @@ def start() -> None:
 
         t = threading.Thread(target=worker, name="pose_worker", daemon=True)
         t.start()
+
+        homography_check = False
         
+        print(
+            "Калибровка: c — показать/скрыть ArUco на проекторе, "
+            "h — оценить homography (камера→проектор) по кадру, q — выход."
+            "d - сбросить homography"
+        )
+
+       
         while True:
             success, frame = cap.read()
-            #print(frame)
 
             if not success:
                 continue
+            frames.set_webcam(frame)
 
             frame_timestamp_ms = int(time.time() * 1000)
+            
             # Положить в очередь свежий кадр (если очередь занята — выбросить старый).
             try:
+                if homography_check:
+                    frame = frames.get_webcam_warped_to_projector()
                 frame_queue.put_nowait((frame_timestamp_ms, frame))
             except queue.Full:
                 try:
@@ -142,15 +310,57 @@ def start() -> None:
             preview_frame = frames.get_preview()
             if preview_frame is not None:
                 cv2.imshow('Preview', preview_frame)
-                
+
+            mapping_res = frames.get_mapping_res()
+            if frames.get_calibration_active() and mapping_res is not None:
+                pw, ph = mapping_res
+                mapping_frame = build_calibration_image(pw, ph)
+           
+            else:
+                mapping_frame = frames.get_mapping()
+                """elif homography_check:
+                mapping_frame = frames.get_webcam_warped_to_projector()"""
+
+            if mapping_frame is not None:
+                cv2.imshow('Mapping', mapping_frame)
+
             cv2.imshow('Webcam', frame)
 
             key = cv2.waitKey(1) & 0xFF
-            if key in (ord('q'), ord('Q'), ord('й'), ord('Й')):
-                if stop_event is not None:
-                    stop_event.set()
-                break
-    
+            if key:
+                if key in (ord('q'), ord('Q')):
+                    if stop_event is not None:
+                        stop_event.set()
+                    break
+                
+                if key in (ord("c"), ord("C")):
+                    nxt = not frames.get_calibration_active()
+                    frames.set_calibration_active(nxt)
+                    print("Режим калибровки (ArUco на проекторе):", "вкл" if nxt else "выкл")
+
+                if key in (ord("h"), ord("H")):
+                    if mapping_res is None:
+                        print("Сначала выберите монитор / задано mapping_res.")
+                    else:
+                        H, info = estimate_homography_cam_to_proj(frame, mapping_res)
+                        if H is not None:
+                            frames.set_homography_cam_to_proj(H)
+                            print("Сохранена homography_cam_to_proj (камера→проектор).", info)
+                            print("H (камера → проектор):")
+                            for row in H:
+                                print(
+                                    "  ["
+                                    + "  ".join(f"{v:12.6f}" for v in row)
+                                    + "]"
+                                )
+                                homography_check = True
+                        else:
+                            print("Homography не оценена:", info)
+                if key in (ord("d"), ord("D")):
+                    frames.set_homography_cam_to_proj(None)
+                    homography_check = False
+                    print("Homography сброшено")           
+        
     finally:
         if stop_event is not None:
             stop_event.set()
@@ -189,6 +399,5 @@ def start() -> None:
 
 
 if __name__ == "__main__":
-    #get_screens()
     start()
     
