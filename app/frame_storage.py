@@ -484,11 +484,9 @@ class TilesStorage:
             root.withdraw()
             root.attributes("-topmost", True)
             path = filedialog.askopenfilename(
-                title="Выберите видео для масок",
+                title="Выберите PNG с прозрачностью для масок",
                 filetypes=[
-                    ("Video files", "*.mp4;*.mov;*.mkv;*.avi;*.webm"),
-                    ("All files", "*.*"),
-                    ("Images", "*.png"),
+                    ("PNG with transparency", "*.png"),
                 ],
             )
             print(path)
@@ -595,8 +593,13 @@ class TilesStorage:
                 self._overlay_cache[key] = ((vh, vw), (y0, y1, x0, x1), overlay)
 
             video_crop = video_bgr[y0:y1, x0:x1]
-            overlay[:, :, :3] = video_crop
-            overlay[:, :, 3] = alpha_crop
+            overlay[:, :, :3] = video_crop[:, :, :3]
+            if video_crop.ndim == 3 and video_crop.shape[2] >= 4:
+                source_alpha = video_crop[:, :, 3].astype(np.uint16)
+                mask_alpha = alpha_crop.astype(np.uint16)
+                overlay[:, :, 3] = ((mask_alpha * source_alpha) // 255).astype(np.uint8)
+            else:
+                overlay[:, :, 3] = alpha_crop
 
             out[mask_name] = overlay
 

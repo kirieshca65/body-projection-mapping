@@ -9,29 +9,7 @@ import cv2
 import numpy as np
 
 
-IMAGE_EXTENSIONS = {
-    ".bmp",
-    ".dib",
-    ".jpeg",
-    ".jpg",
-    ".jpe",
-    ".jp2",
-    ".png",
-    ".webp",
-    ".pbm",
-    ".pgm",
-    ".ppm",
-    ".pxm",
-    ".pnm",
-    ".pfm",
-    ".sr",
-    ".ras",
-    ".tiff",
-    ".tif",
-    ".exr",
-    ".hdr",
-    ".pic",
-}
+TRANSPARENT_IMAGE_EXTENSIONS = {".png"}
 
 
 @dataclass
@@ -64,8 +42,8 @@ class BufferedVideoReader:
             self._thread.start()
 
     def _open(self) -> None:
-        image = self._read_static_image(self.path)
-        if image is not None:
+        if self._looks_like_image(self.path):
+            image = self._read_static_image(self.path)
             self._is_static_image = True
             self._publish_frame(image)
             return
@@ -81,23 +59,22 @@ class BufferedVideoReader:
         suffix = ""
         if "." in path:
             suffix = path.rsplit(".", 1)[-1].lower()
-        return bool(suffix) and f".{suffix}" in IMAGE_EXTENSIONS
+        return bool(suffix) and f".{suffix}" in TRANSPARENT_IMAGE_EXTENSIONS
 
     @classmethod
     def _read_static_image(cls, path: str) -> Optional[np.ndarray]:
-        if not cls._looks_like_image(path):
-            return None
-
         try:
             data = np.fromfile(path, dtype=np.uint8)
         except OSError:
-            return None
+            raise FileNotFoundError(f"Unable to open image: {path}")
         if data.size == 0:
-            return None
+            raise FileNotFoundError(f"Unable to open image: {path}")
 
         image = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
         if image is None:
-            return None
+            raise FileNotFoundError(f"Unable to decode image: {path}")
+        if image.ndim != 3 or image.shape[2] < 4:
+            raise ValueError(f"Image must have an alpha channel: {path}")
         return cls._to_bgr_frame(image)
 
     @staticmethod
@@ -105,7 +82,7 @@ class BufferedVideoReader:
         if image.ndim == 2:
             return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
         if image.ndim == 3 and image.shape[2] == 4:
-            return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+            return image
         if image.ndim == 3 and image.shape[2] == 3:
             return image
         raise ValueError(f"Unsupported image shape: {image.shape}")

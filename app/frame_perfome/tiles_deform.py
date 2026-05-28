@@ -79,7 +79,7 @@ class _ExpSmoother2D:
         return out
 
 
-_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.6)
+_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.75)
 
 
 class _ExpSmoother1D:
@@ -102,7 +102,7 @@ class _ExpSmoother1D:
         return out
 
 
-_DEPTH_SCALE_SMOOTHER = _ExpSmoother1D(alpha=0.6)
+_DEPTH_SCALE_SMOOTHER = _ExpSmoother1D(alpha=0.75)
 
 
 def _split_landmark_sets(landmarks):
