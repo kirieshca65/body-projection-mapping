@@ -486,7 +486,7 @@ class TilesStorage:
             path = filedialog.askopenfilename(
                 title="Выберите PNG с прозрачностью для масок",
                 filetypes=[
-                    ("PNG with transparency", "*.png"),
+                    ("PNG or video", "*.png;*.mp4;*.mov;*.mkv;*.avi;*.webm"),
                 ],
             )
             print(path)

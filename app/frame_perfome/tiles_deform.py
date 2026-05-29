@@ -8,9 +8,9 @@ except ImportError:
     from frame_storage import frames, tiles
 
 """Коффициент добавочного масштабирования торса"""
-size_adjust : float =  1.1
+size_adjust : float =  1.05
 """Вертикальный сдвиг torso tile вверх (доля высоты кадра)"""
-torso_y_shift : float = 0.02
+torso_y_shift : float = 0.1
 """
 - width_scale: ширина полосы как доля длины отрезка
 - extend_scale: насколько продлить отрезок за точки (доля длины)
@@ -27,8 +27,8 @@ larger on the wall to keep the same size on the person.
 projector_wall_distance_m: float = 2.5
 world_z_reference_m: float = 0
 world_z_direction: float = -1.0
-distance_scale_min: float = 0.65
-distance_scale_max: float = 1.1
+distance_scale_min: float = 0.5
+distance_scale_max: float = 1.5
 
 background : np.ndarray = None
 
@@ -79,7 +79,7 @@ class _ExpSmoother2D:
         return out
 
 
-_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.75)
+_POINT_SMOOTHER = _ExpSmoother2D(alpha=0.9)
 
 
 class _ExpSmoother1D:
@@ -102,7 +102,7 @@ class _ExpSmoother1D:
         return out
 
 
-_DEPTH_SCALE_SMOOTHER = _ExpSmoother1D(alpha=0.75)
+_DEPTH_SCALE_SMOOTHER = _ExpSmoother1D(alpha=0.9)
 
 
 def _split_landmark_sets(landmarks):
